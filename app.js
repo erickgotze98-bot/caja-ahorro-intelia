@@ -98,6 +98,9 @@ function friendlyError(error) {
   if (lower.includes("requiere nota de ajuste")) return "La diferencia supera $10. Escribe una explicación de al menos cinco caracteres.";
   if (lower.includes("excede el saldo pendiente")) return "El abono es mayor que lo que falta por pagar.";
   if (lower.includes("saldo negativo") || lower.includes("saldos no pueden ser negativos")) return "Este movimiento dejaría el dinero disponible por debajo de cero.";
+  if (lower.includes("el monto debe ser mayor") || lower.includes("maximo dos decimales") || lower.includes("máximo dos decimales")) return "Revisa que el monto sea mayor que cero y tenga máximo dos decimales.";
+  if (lower.includes("metodo de pago invalido") || lower.includes("método de pago inválido")) return "Elige efectivo o transferencia como forma de pago.";
+  if (lower.includes("vencimiento excede") || lower.includes("fecha final del ciclo")) return "El plazo del préstamo termina después del ciclo. Reduce las semanas o elige otra fecha.";
   if (lower.includes("limite de credito") || lower.includes("límite de crédito")) return "El préstamo supera el límite de crédito de esta persona.";
   if (lower.includes("vulneraria reserva") || lower.includes("vulneraría reserva")) return "El préstamo dejaría menos dinero que la reserva mínima.";
   if (lower.includes("solo participantes activos")) return "Solo las personas activas pueden recibir un préstamo.";
@@ -889,6 +892,16 @@ async function cancelTransaction(id, button) {
     if (error) { toast(friendlyError(error), "error"); return; }
     toast("Movimiento anulado y guardado en la bitácora.", "success");
     await refreshData();
+  } catch (error) {
+    if (isNetworkError(error)) {
+      await refreshData();
+      const latest = state.transactions.find((row) => row.id === id);
+      toast(latest?.anulado
+        ? "La anulación sí quedó guardada. El historial ya está actualizado."
+        : "Se perdió la conexión mientras se anulaba. Revisa el historial antes de volver a intentarlo.", latest?.anulado ? "success" : "error");
+    } else {
+      toast(friendlyError(error), "error");
+    }
   } finally {
     cancellingTransaction = false;
     if (button?.isConnected) { button.disabled = false; button.textContent = "Anular"; }
@@ -949,9 +962,13 @@ async function closeCycle() {
 
 async function logout() {
   if (queueCount() && !window.confirm(`Hay ${queueCount()} registro${queueCount() === 1 ? "" : "s"} sin enviar. Seguirán guardados en este teléfono; vuelve a entrar con la misma cuenta para sincronizarlos. ¿Quieres salir?`)) return;
-  const { error } = await supabase.auth.signOut({ scope: "local" });
-  if (error) { toast("No se pudo cerrar la sesión en este dispositivo. Intenta otra vez.", "error"); return; }
-  await startSession(null);
+  try {
+    const { error } = await supabase.auth.signOut({ scope: "local" });
+    if (error) { toast("No se pudo cerrar la sesión en este dispositivo. Intenta otra vez.", "error"); return; }
+    await startSession(null);
+  } catch (error) {
+    toast(friendlyError(error), "error");
+  }
 }
 
 function handleClick(event) {
@@ -962,15 +979,15 @@ function handleClick(event) {
   if (action === "logout") { logout(); return; }
   if (action === "sync") { syncQueue(); return; }
   if (action === "cancel-tx") { cancelTransaction(button.dataset.id, button); return; }
-  if (action === "close-cycle") { closeCycle(); return; }
+  if (action === "close-cycle") { closeCycle().catch((error) => toast(friendlyError(error), "error")); return; }
   if (action === "whatsapp") { const person = state.people.find((row) => row.id === button.dataset.person); if (person) whatsappLink(person, Number(button.dataset.amount)); return; }
-  if (action === "select-cycle") { state.selectedCycleId = button.dataset.id; state.view = "inicio"; refreshData(); return; }
+  if (action === "select-cycle") { state.selectedCycleId = button.dataset.id; state.view = "inicio"; renderShell(); if (isOnline()) refreshData(); return; }
   if (action === "discard-queue") {
     if (!window.confirm("¿Quitar este movimiento guardado de este dispositivo? No se enviará al servidor.")) return;
-    storeDelete("queue", button.dataset.id).then(refreshPending); return;
+    storeDelete("queue", button.dataset.id).then(refreshPending).catch((error) => toast(friendlyError(error), "error")); return;
   }
   if (action === "retry-queue") {
-    storeGetAll("queue").then((rows) => rows.find((row) => row.id === button.dataset.id)).then((row) => row && storePut("queue", { ...row, status: "pending", last_error: null })).then(syncQueue); return;
+    storeGetAll("queue").then((rows) => rows.find((row) => row.id === button.dataset.id)).then((row) => row && storePut("queue", { ...row, status: "pending", last_error: null })).then(syncQueue).catch((error) => toast(friendlyError(error), "error")); return;
   }
 }
 
@@ -1014,7 +1031,7 @@ appScreen.addEventListener("change", (event) => {
     const person = document.querySelector("#movement-person");
     if (person && chosen) person.value = chosen;
   }
-  if (event.target.matches("#cycle-picker, #cycle-picker-mobile")) { state.selectedCycleId = event.target.value; refreshData(); }
+  if (event.target.matches("#cycle-picker, #cycle-picker-mobile")) { state.selectedCycleId = event.target.value; renderShell(); refreshData(); }
 });
 
 window.addEventListener("online", () => { renderShell(); if (state.user) syncQueue(); });
