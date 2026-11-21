@@ -1,0 +1,17 @@
+{
+  "name": "caja-ahorro-intelia",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "preview": "npx http-server dist -p 4173 -c-1"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^3.4.17"
+  }
+}

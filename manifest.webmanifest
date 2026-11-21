@@ -1,0 +1,14 @@
+{
+  "name": "Mi Caja · Intelia",
+  "short_name": "Mi Caja",
+  "description": "Caja de ahorro y préstamos",
+  "lang": "es-MX",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fbfaf7",
+  "theme_color": "#fbfaf7",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
