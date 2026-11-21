@@ -31,11 +31,9 @@ Abre `http://localhost:4173`. Para probar el modo sin conexión, abre la app una
 
 ## Publicación web
 
-Los archivos estáticos publicados se alojan en un bucket público de Supabase Storage. Ese bucket contiene únicamente el frontend (HTML, JavaScript, CSS e iconos); no contiene información financiera ni permite leer las tablas de la aplicación.
+El bucket `mi-caja-web` de Supabase contiene únicamente archivos estáticos de la interfaz. No contiene datos financieros. Su URL pública actual entrega `index.html` como texto plano, por lo que no debe usarse como enlace de la aplicación hasta corregir el tipo de contenido o publicarla con un host de sitios estáticos.
 
-La versión actual está publicada en: <https://gxqcybqrxvpqwrfsswae.supabase.co/storage/v1/object/public/mi-caja-web/index.html>. El bucket público permite que cualquier persona descargue estos archivos de interfaz; los datos de la caja siguen requiriendo iniciar sesión y pasan por RLS.
-
-El proyecto también está preparado para Vercel. Si se migra ahí, importa el repositorio privado y usa:
+El proyecto está preparado para Vercel. Importa el repositorio privado y usa:
 
 - Build command: `npm run build`
 - Output directory: `dist`
