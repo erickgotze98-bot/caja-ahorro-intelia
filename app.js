@@ -333,7 +333,7 @@ function loanCapitalBalance(loan) {
 }
 
 function queueCount() { return state.pending.filter((item) => item.status === "pending" || item.status === "blocked").length; }
-function queuedLabel(item) { return item.action === "loan" ? "Préstamo" : (movementLabels[item.payload.p_tipo_movimiento] || item.payload.p_tipo_movimiento); }
+function queuedLabel(item) { return item.action === "loan" ? "Préstamo" : item.action === "income" ? "Ingreso a caja" : (movementLabels[item.payload.p_tipo_movimiento] || item.payload.p_tipo_movimiento); }
 function queuedAmount(item) { return item.action === "loan" ? item.payload.p_capital : item.payload.p_monto; }
 function queuedDate(item) { return item.action === "loan" ? item.payload.p_fecha_desembolso : item.payload.p_fecha_operacion; }
 function nextQueuedAt() {
@@ -356,6 +356,7 @@ function renderQueueEntry(item) {
   const loanOptions = cycleLoans.map((loan) => `<option value="${h(loan.id)}" data-person="${h(loan.participante_id)}" ${loan.id === payload.p_prestamo_id ? "selected" : ""}>${h(participantName(loan.participante_id))} · ${money(loanBalance(loan))} pendiente</option>`).join("");
   const selectedPerson = state.people.find((person) => person.id === payload.p_participante_id) || state.people.find((person) => person.id === selectedLoan?.participante_id);
   const peopleOptions = activePeople().map((person) => `<option value="${h(person.id)}" ${person.id === selectedPerson?.id ? "selected" : ""}>${h(person.nombre)} · ${person.tipo === "socio" ? "socio" : "externo"}</option>`).join("");
+  const incomePeopleOptions = state.people.filter((person) => person.tipo === "socio" && person.estatus === "activo").map((person) => `<option value="${h(person.id)}" ${person.id === selectedPerson?.id ? "selected" : ""}>${h(person.nombre)}</option>`).join("");
   const movementOptions = ["ahorro_semanal", "abono_prestamo", "pago_multa", "retiro_caja", "gasto", "ajuste_ingreso", "ajuste_egreso"].map((kind) => `<option value="${kind}" ${kind === payload.p_tipo_movimiento ? "selected" : ""}>${movementLabels[kind]}</option>`).join("");
   const correction = !blocked || conflict ? "" : item.action === "loan" ? `
     <details class="mt-3 rounded-xl bg-slate-50 p-3"><summary class="cursor-pointer text-sm font-bold text-teal-800">Corregir datos y reenviar</summary>
@@ -366,6 +367,17 @@ function renderQueueEntry(item) {
         <label class="field-label">Forma de pago<select class="field" name="method" required><option value="efectivo" ${payload.p_metodo_pago === "efectivo" ? "selected" : ""}>Efectivo</option><option value="transferencia" ${payload.p_metodo_pago === "transferencia" ? "selected" : ""}>Transferencia</option></select></label>
         <label class="field-label">Nota<input class="field" name="note" maxlength="1000" value="${h(payload.p_nota || "")}" /></label>
         <p class="text-xs leading-5 text-slate-500">El pago debe quedar liquidado antes de entregar la caja. El folio se conservará.</p>
+        <button class="btn-primary w-full" type="submit">Guardar corrección y reenviar</button>
+      </form>
+    </details>` : item.action === "income" ? `
+    <details class="mt-3 rounded-xl bg-slate-50 p-3"><summary class="cursor-pointer text-sm font-bold text-teal-800">Corregir datos y reenviar</summary>
+      <form class="mt-3 grid gap-3" data-queue-correction="${h(item.id)}">
+        <label class="field-label">Socio<select class="field" name="participant_id" required>${incomePeopleOptions}</select></label>
+        <label class="field-label">Cantidad<input class="field" name="amount" type="number" inputmode="decimal" min="0.01" max="${MAX_DB_AMOUNT}" step="0.01" value="${h(payload.p_monto)}" required /></label>
+        <label class="field-label">Fecha de aportación<input class="field" name="date" type="date" max="${todayMx()}" value="${h(payload.p_fecha_operacion)}" required /></label>
+        <label class="field-label">Forma de entrega<select class="field" name="method" required><option value="efectivo" ${payload.p_metodo_pago === "efectivo" ? "selected" : ""}>Efectivo</option><option value="transferencia" ${payload.p_metodo_pago === "transferencia" ? "selected" : ""}>Transferencia</option></select></label>
+        <label class="field-label">Nota<input class="field" name="note" maxlength="1000" value="${h(payload.p_nota || "")}" /></label>
+        <p class="text-xs leading-5 text-slate-500">La fecha puede ser cualquier día dentro de la caja. El folio se conservará.</p>
         <button class="btn-primary w-full" type="submit">Guardar corrección y reenviar</button>
       </form>
     </details>` : `
@@ -670,7 +682,7 @@ function renderView() {
 
 function renderIncomeEntry() {
   const cycle = selectedCycle();
-  return `<div class="grid gap-5 xl:grid-cols-[minmax(0,560px)_1fr]"><section class="card"><p class="text-xs font-bold uppercase tracking-wide text-teal-700">Entradas de dinero</p><h2 class="mt-1 text-xl font-extrabold">Ingreso a caja</h2><p class="mt-2 text-sm leading-6 text-slate-500">Anota quién aportó, cuánto y cómo lo entregó. Las aportaciones se registran aparte de los abonos de préstamos.</p><form id="income-form" class="mt-5 space-y-4"><label class="field-label">¿Quién aportó?<select class="field" name="participant_id" required><option value="">Elige a un socio</option>${participantOptions("socio", state.selectedPersonId || "", true)}</select></label><label class="field-label">Cantidad<input class="field" name="amount" type="number" min="0.01" max="${MAX_DB_AMOUNT}" step="0.01" inputmode="decimal" required placeholder="0.00" /></label><label class="field-label">Fecha de aportación<input class="field" name="date" type="date" min="${cycle?.fecha_inicio || ""}" max="${todayMx()}" required value="${lastSaturdayOnOrBefore()}" /></label><label class="field-label">Forma de entrega<select class="field" name="method"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option></select></label><label class="field-label">Nota (opcional)<input class="field" name="note" maxlength="1000" placeholder="Detalle breve" /></label><button class="btn-primary w-full" type="submit" ${!cycle || state.syncing ? "disabled" : ""}>Guardar ingreso${!isOnline() ? " en este teléfono" : ""}</button></form><p class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm leading-5 text-amber-900">La base de datos actualmente acepta movimientos con fecha de sábado. Las aportaciones de otro día requieren actualizar esa regla en Supabase para poder guardarse.</p></section><section class="card"><h2 class="text-lg font-extrabold">Aportaciones recientes</h2><div class="mt-4">${renderTransactionsTable(state.transactions.filter((tx) => tx.ciclo_id === cycle?.id && tx.tipo_movimiento === "ahorro_semanal"), false)}</div></section></div>`;
+  return `<div class="grid gap-5 xl:grid-cols-[minmax(0,560px)_1fr]"><section class="card"><p class="text-xs font-bold uppercase tracking-wide text-teal-700">Entradas de dinero</p><h2 class="mt-1 text-xl font-extrabold">Ingreso a caja</h2><p class="mt-2 text-sm leading-6 text-slate-500">Anota quién aportó, cuánto y cómo lo entregó. Las aportaciones se registran aparte de los abonos de préstamos.</p><form id="income-form" class="mt-5 space-y-4"><label class="field-label">¿Quién aportó?<select class="field" name="participant_id" required><option value="">Elige a un socio</option>${participantOptions("socio", state.selectedPersonId || "", true)}</select></label><label class="field-label">Cantidad<input class="field" name="amount" type="number" min="0.01" max="${MAX_DB_AMOUNT}" step="0.01" inputmode="decimal" required placeholder="0.00" /></label><label class="field-label">Fecha de aportación (cualquier día)<input class="field" name="date" type="date" min="${cycle?.fecha_inicio || ""}" max="${todayMx()}" required value="${todayMx()}" /></label><label class="field-label">Forma de entrega<select class="field" name="method"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option></select></label><label class="field-label">Nota (opcional)<input class="field" name="note" maxlength="1000" placeholder="Detalle breve" /></label><button class="btn-primary w-full" type="submit" ${!cycle || state.syncing ? "disabled" : ""}>Guardar ingreso${!isOnline() ? " en este teléfono" : ""}</button></form><p class="mt-4 text-xs leading-5 text-slate-500">La fecha debe ser hoy o anterior, quedar dentro de la caja y pertenecer a un periodo que siga abierto.</p></section><section class="card"><h2 class="text-lg font-extrabold">Aportaciones recientes</h2><div class="mt-4">${renderTransactionsTable(state.transactions.filter((tx) => tx.ciclo_id === cycle?.id && tx.tipo_movimiento === "ahorro_semanal"), false)}</div></section></div>`;
 }
 
 async function fetchAll(table, select = "*", orderColumn = "id") {
@@ -867,6 +879,15 @@ function validateSaturdayAndCycle(date, cycle, label = "La fecha") {
   return "";
 }
 
+function validateIncomeDate(date, cycle) {
+  if (!cycle) return "Primero prepara o elige una caja abierta.";
+  if (!date) return "Elige la fecha de la aportación.";
+  if (date > todayMx()) return "La fecha no puede estar en el futuro.";
+  if (date < cycle.fecha_inicio || date > cycle.fecha_fin) return "La fecha debe quedar dentro de la caja abierta.";
+  if (state.arqueos.some((row) => row.ciclo_id === cycle.id && row.fecha_sabado >= date)) return "Ese periodo ya se cerró. Elige una fecha posterior al último cierre.";
+  return "";
+}
+
 function personForKind(kind) {
   const person = document.querySelector("#movement-person");
   const loan = document.querySelector("#movement-loan");
@@ -943,7 +964,8 @@ async function syncQueue() {
     for (const item of rows) {
       if (item.status === "blocked") continue;
       try {
-        const { error } = await supabase.rpc(item.action === "loan" ? "crear_prestamo" : "registrar_transaccion", item.payload);
+        const rpcName = item.action === "loan" ? "crear_prestamo" : item.action === "income" ? "registrar_aportacion_cualquier_dia" : "registrar_transaccion";
+        const { error } = await supabase.rpc(rpcName, item.payload);
         if (error) throw error;
         await storeDelete("queue", item.id);
         syncedCount += 1;
@@ -1007,6 +1029,23 @@ async function correctQueuedItem(form) {
     payload.p_metodo_pago = method;
     payload.p_nota = note;
     if (!window.confirm(`Se corregirá el préstamo de ${participant.nombre} por ${money(capital)}. Se conservará el mismo folio y se volverán a revisar las reglas de la caja. ¿Continuar?`)) return;
+  } else if (item.action === "income") {
+    const participantId = String(data.get("participant_id") || "");
+    const participant = state.people.find((person) => person.id === participantId && person.tipo === "socio" && person.estatus === "activo");
+    const amount = Number(data.get("amount"));
+    const date = String(data.get("date") || "");
+    const method = String(data.get("method") || "");
+    const validation = validateIncomeDate(date, cycle);
+    if (validation) { toast(validation, "error"); return; }
+    if (!participant) { toast("Elige un socio activo de la caja.", "error"); return; }
+    if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_DB_AMOUNT || Math.round(amount * 100) !== amount * 100) { toast("La cantidad debe ser mayor que cero y tener máximo dos decimales.", "error"); return; }
+    if (!["efectivo", "transferencia"].includes(method)) { toast("Elige efectivo o transferencia como forma de entrega.", "error"); return; }
+    payload.p_participante_id = participant.id;
+    payload.p_monto = Number(amount.toFixed(2));
+    payload.p_fecha_operacion = date;
+    payload.p_metodo_pago = method;
+    payload.p_nota = note;
+    if (!window.confirm(`Se corregirá el ingreso a caja de ${participant.nombre} por ${money(amount)}. Se conservará el mismo folio. ¿Continuar?`)) return;
   } else {
     const kind = String(data.get("kind") || "");
     const participantId = String(data.get("participant_id") || "") || null;
@@ -1071,16 +1110,16 @@ async function saveIncome(form) {
   const participantId = String(data.get("participant_id") || "");
   const method = String(data.get("method") || "");
   const note = String(data.get("note") || "").trim() || null;
-  const validation = validateSaturdayAndCycle(date, cycle, "La fecha de la aportación");
-  if (validation) { toast(validation.includes("sábado") ? "La base de datos solo acepta aportaciones con fecha de sábado. Para capturar cualquier día hace falta habilitar esa regla en Supabase." : validation, "error"); return; }
+  const validation = validateIncomeDate(date, cycle);
+  if (validation) { toast(validation, "error"); return; }
   const person = state.people.find((row) => row.id === participantId && row.tipo === "socio" && row.estatus === "activo");
   if (!person) { toast("Elige un socio activo de la caja.", "error"); return; }
   if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_DB_AMOUNT || Math.round(amount * 100) !== amount * 100) { toast("Escribe una cantidad mayor a cero y con máximo dos decimales.", "error"); return; }
   if (note && note.length > 1000) { toast("La nota no puede tener más de 1,000 caracteres.", "error"); return; }
   if (!["efectivo", "transferencia"].includes(method)) { toast("Elige efectivo o transferencia como forma de entrega.", "error"); return; }
   if (!window.confirm(`Confirma el ingreso a caja:\n\n${person.nombre}\n${money(amount)}\n${dateText(date)} · ${paymentLabels[method]}\n\n¿Guardar?`)) return;
-  const payload = { p_ciclo_id: cycle.id, p_tipo_movimiento: "ahorro_semanal", p_monto: Number(amount.toFixed(2)), p_metodo_pago: method, p_fecha_operacion: date, p_participante_id: person.id, p_prestamo_id: null, p_nota: note, p_id: crypto.randomUUID() };
-  const record = { id: payload.p_id, action: "movement", owner_id: state.user.id, payload, created_at: nextQueuedAt(), status: "pending", last_error: null };
+  const payload = { p_ciclo_id: cycle.id, p_monto: Number(amount.toFixed(2)), p_metodo_pago: method, p_fecha_operacion: date, p_participante_id: person.id, p_id: crypto.randomUUID(), p_nota: note };
+  const record = { id: payload.p_id, action: "income", owner_id: state.user.id, payload, created_at: nextQueuedAt(), status: "pending", last_error: null };
   try { await storePut("queue", record); } catch (error) { toast(friendlyError(error), "error"); return; }
   await refreshPending();
   if (isOnline()) await syncQueue();
@@ -1185,7 +1224,8 @@ async function cancelTransaction(id, button) {
   cancellingTransaction = true;
   if (button) { button.disabled = true; button.textContent = "Anulando…"; }
   try {
-    const { error } = await supabase.rpc("anular_transaccion", { p_transaccion_id: id, p_motivo: reason.trim() });
+    const annulRpc = transaction.tipo_movimiento === "ahorro_semanal" ? "anular_aportacion_cualquier_dia" : "anular_transaccion";
+    const { error } = await supabase.rpc(annulRpc, { p_transaccion_id: id, p_motivo: reason.trim() });
     if (error) { toast(friendlyError(error), "error"); return; }
     toast("Movimiento anulado y guardado en la bitácora.", "success");
     await refreshData();
