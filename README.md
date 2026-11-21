@@ -4,8 +4,8 @@ Aplicación web privada para administrar una caja de ahorro y una cartera de pr�
 
 ## Qué incluye
 
-- Inicio de sesión con Supabase Auth; la app no ofrece registro público.
-- Bloqueo de acceso hasta cambiar la contraseña cuando `user_metadata.must_change_password` sea `true`. Al guardarla, cambia el marcador a `false`.
+- Inicio de sesión con Supabase Auth; el frontend no muestra una opción de registro.
+- La interfaz bloquea el acceso hasta cambiar la contraseña cuando `user_metadata.must_change_password` sea `true`. Ese marcador vive en metadatos que el usuario puede modificar: controla la interfaz, pero no es una barrera de autorización del servidor. Para exigirlo también en el backend se necesita una marca administrada por el servidor y validarla desde las RPC o un Auth Hook.
 - Lectura de datos bajo la sesión `authenticated` y las políticas RLS del proyecto.
 - Altas de ciclos y personas únicamente con los permisos de sus tablas; los movimientos, préstamos, anulaciones y cierres usan las funciones RPC del backend.
 - Tasa fija de 5%, cierre de sábados consecutivos, tolerancia de $10, conciliación de efectivo y banco y reparto proporcional calculado por `cerrar_ciclo`.
