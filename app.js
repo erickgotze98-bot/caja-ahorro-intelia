@@ -1544,14 +1544,14 @@ async function verifyAccessOnReturn() {
   authScreen.innerHTML = `<main class="safe-top safe-bottom flex min-h-screen items-center justify-center px-4"><section class="card text-center"><h1 class="text-xl font-extrabold">Mi Caja</h1><p class="mt-2 text-sm text-slate-500">Revisando el acceso…</p></section></main>`;
   try {
     const { data, error } = await supabase.auth.getUser();
-    if (error) { verifyingAccess = false; renderShell(); return; }
+    if (error) { verifyingAccess = false; renderLogin("No pudimos comprobar tu acceso. Revisa tu conexión e inicia sesión de nuevo."); return; }
     if (!data.user) { await startSession(null); return; }
     state.user = data.user;
     state.session = { ...state.session, user: data.user };
     verifyingAccess = false;
     if (data.user.user_metadata?.must_change_password === true) renderPasswordChange();
     else await startSession(state.session);
-  } catch { verifyingAccess = false; renderShell(); }
+  } catch { verifyingAccess = false; renderLogin("No pudimos comprobar tu acceso. Revisa tu conexión e inicia sesión de nuevo."); }
   finally { verifyingAccess = false; }
 }
 
