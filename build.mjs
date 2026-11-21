@@ -32,7 +32,7 @@ await build({
 });
 
 fs.copyFileSync(path.join(root, "index.html"), path.join(dist, "index.html"));
-for (const name of ["manifest.webmanifest", "icon.svg", "sw.js"]) {
+for (const name of ["manifest.webmanifest", "icon.svg", "sw.js", ".nojekyll"]) {
   fs.copyFileSync(path.join(root, name), path.join(dist, name));
 }
 console.log("Compilación lista en dist/");

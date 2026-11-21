@@ -85,6 +85,12 @@ function isNetworkError(error) {
   return !isOnline() || error?.name === "TypeError" || message.includes("fetch") || message.includes("network") || message.includes("failed to send") || message.includes("load failed");
 }
 
+function isDefinitiveServerRejection(error) {
+  const code = String(error?.code || "");
+  const status = Number(error?.status || error?.statusCode || 0);
+  return /^[A-Z0-9]{5}$/.test(code) || (status >= 400 && status < 500);
+}
+
 function friendlyError(error) {
   const message = String(error?.message || error || "");
   const lower = message.toLowerCase();
@@ -201,7 +207,7 @@ function renderLogin(message = "") {
       <section class="w-full max-w-md">
         <div class="mb-8 flex items-center gap-3">
           <img src="./icon.svg" class="h-12 w-12 rounded-2xl" alt="" />
-          <div><p class="text-xs font-bold uppercase tracking-[.18em] text-teal-700">Intelia</p><h1 class="text-2xl font-extrabold text-ink">Mi Caja</h1></div>
+          <div><h1 class="text-2xl font-extrabold text-ink">Mi Caja</h1></div>
         </div>
         <div class="card p-6 sm:p-8">
           <p class="text-sm font-semibold text-teal-700">Bienvenido</p>
@@ -225,7 +231,7 @@ function renderPasswordChange(message = "") {
   authScreen.innerHTML = `
     <main class="safe-top safe-bottom flex min-h-screen items-center justify-center px-4 py-10">
       <section class="w-full max-w-md">
-        <div class="mb-8 flex items-center gap-3"><img src="./icon.svg" class="h-12 w-12 rounded-2xl" alt="" /><div><p class="text-xs font-bold uppercase tracking-[.18em] text-teal-700">Intelia</p><h1 class="text-2xl font-extrabold">Mi Caja</h1></div></div>
+        <div class="mb-8 flex items-center gap-3"><img src="./icon.svg" class="h-12 w-12 rounded-2xl" alt="" /><div><h1 class="text-2xl font-extrabold">Mi Caja</h1></div></div>
         <div class="card p-6 sm:p-8">
           <span class="badge badge-amber">Paso necesario</span>
           <h2 class="mt-4 text-2xl font-extrabold">Crea tu contraseña personal</h2>
@@ -288,6 +294,52 @@ function nextQueuedAt() {
   return new Date(Math.max(Date.now(), previous + 1)).toISOString();
 }
 
+function queueErrorText(item) {
+  if (/p_id ya fue usado/i.test(String(item.last_error || ""))) return "El servidor ya tiene este folio con otros datos. No lo reenvíes ni lo quites del teléfono; revisa el historial antes de continuar.";
+  if (item.status !== "blocked" && item.last_error) return "No se confirmó el resultado por la conexión. Se reintentará con el mismo folio y los mismos datos para evitar duplicados.";
+  return friendlyError(item.last_error);
+}
+
+function renderQueueEntry(item) {
+  const payload = item.payload;
+  const blocked = item.status === "blocked";
+  const conflict = /p_id ya fue usado/i.test(String(item.last_error || ""));
+  const cycleLoans = state.loans.filter((loan) => loan.ciclo_id === payload.p_ciclo_id);
+  const selectedLoan = cycleLoans.find((loan) => loan.id === payload.p_prestamo_id);
+  const loanOptions = cycleLoans.map((loan) => `<option value="${h(loan.id)}" data-person="${h(loan.participante_id)}" ${loan.id === payload.p_prestamo_id ? "selected" : ""}>${h(participantName(loan.participante_id))} · ${money(loanBalance(loan))} pendiente</option>`).join("");
+  const selectedPerson = state.people.find((person) => person.id === payload.p_participante_id) || state.people.find((person) => person.id === selectedLoan?.participante_id);
+  const peopleOptions = activePeople().map((person) => `<option value="${h(person.id)}" ${person.id === selectedPerson?.id ? "selected" : ""}>${h(person.nombre)} · ${person.tipo === "socio" ? "socio" : "externo"}</option>`).join("");
+  const movementOptions = ["ahorro_semanal", "abono_prestamo", "pago_multa", "retiro_caja", "gasto", "ajuste_ingreso", "ajuste_egreso"].map((kind) => `<option value="${kind}" ${kind === payload.p_tipo_movimiento ? "selected" : ""}>${movementLabels[kind]}</option>`).join("");
+  const correction = !blocked || conflict ? "" : item.action === "loan" ? `
+    <details class="mt-3 rounded-xl bg-slate-50 p-3"><summary class="cursor-pointer text-sm font-bold text-teal-800">Corregir datos y reenviar</summary>
+      <form class="mt-3 grid gap-3" data-queue-correction="${h(item.id)}">
+        <label class="field-label">Persona<select class="field" name="participant_id" required>${peopleOptions}</select></label>
+        <label class="field-label">Capital<input class="field" name="capital" type="number" inputmode="decimal" min="0.01" max="${MAX_DB_AMOUNT}" step="0.01" value="${h(payload.p_capital)}" required /></label>
+        <label class="field-label">Plazo en semanas<input class="field" name="weeks" type="number" min="1" max="52" step="1" value="${h(payload.p_plazo_semanas)}" required /></label>
+        <label class="field-label">Fecha de entrega<input class="field" name="date" type="date" max="${todayMx()}" value="${h(payload.p_fecha_desembolso)}" required /></label>
+        <label class="field-label">Forma de pago<select class="field" name="method" required><option value="efectivo" ${payload.p_metodo_pago === "efectivo" ? "selected" : ""}>Efectivo</option><option value="transferencia" ${payload.p_metodo_pago === "transferencia" ? "selected" : ""}>Transferencia</option></select></label>
+        <label class="field-label">Nota<input class="field" name="note" maxlength="1000" value="${h(payload.p_nota || "")}" /></label>
+        <p class="text-xs leading-5 text-slate-500">El folio se conservará y se revisarán otra vez las reglas del ciclo.</p>
+        <button class="btn-primary w-full" type="submit">Guardar corrección y reenviar</button>
+      </form>
+    </details>` : `
+    <details class="mt-3 rounded-xl bg-slate-50 p-3"><summary class="cursor-pointer text-sm font-bold text-teal-800">Corregir datos y reenviar</summary>
+      <form class="mt-3 grid gap-3" data-queue-correction="${h(item.id)}">
+        <label class="field-label">Tipo de movimiento<select class="field" name="kind" required>${movementOptions}</select></label>
+        <label class="field-label">Persona<select class="field" name="participant_id"><option value="">No aplica</option>${peopleOptions}</select></label>
+        <label class="field-label">Préstamo relacionado<select class="field" name="loan_id"><option value="">No aplica</option>${loanOptions}</select></label>
+        <label class="field-label">Monto<input class="field" name="amount" type="number" inputmode="decimal" min="0.01" max="${MAX_DB_AMOUNT}" step="0.01" value="${h(payload.p_monto)}" required /></label>
+        <label class="field-label">Fecha<input class="field" name="date" type="date" max="${todayMx()}" value="${h(payload.p_fecha_operacion)}" required /></label>
+        <label class="field-label">Forma de pago<select class="field" name="method" required><option value="efectivo" ${payload.p_metodo_pago === "efectivo" ? "selected" : ""}>Efectivo</option><option value="transferencia" ${payload.p_metodo_pago === "transferencia" ? "selected" : ""}>Transferencia</option></select></label>
+        <label class="field-label">Nota<input class="field" name="note" maxlength="1000" value="${h(payload.p_nota || "")}" /></label>
+        <p class="text-xs leading-5 text-slate-500">El folio se conservará. Si eliges un abono, selecciona también el préstamo correcto. Los datos se vuelven a validar antes de enviarse.</p>
+        <button class="btn-primary w-full" type="submit">Guardar corrección y reenviar</button>
+      </form>
+    </details>`;
+  const actions = blocked ? `<div class="mt-2 flex flex-wrap gap-2">${conflict ? "" : `<button class="btn-quiet px-2 py-1 text-xs" data-action="retry-queue" data-id="${h(item.id)}">Reintentar igual</button><button class="btn-quiet px-2 py-1 text-xs text-rose-700" data-action="discard-queue" data-id="${h(item.id)}">Descartar del teléfono</button>`}</div>${correction}` : `<p class="mt-2 text-xs text-slate-500">Se volverá a enviar automáticamente al recuperar conexión.</p>`;
+  return `<article class="rounded-xl border ${blocked ? "border-rose-200 bg-rose-50/40" : "border-slate-100"} p-3"><div class="flex items-start justify-between gap-2"><div><p class="text-sm font-bold">${h(queuedLabel(item))}</p><p class="text-xs text-slate-500">${dateText(queuedDate(item))} · ${money(queuedAmount(item))}</p><p class="mt-1 text-[11px] text-slate-400">Folio: ${h(payload.p_id)}</p></div><span class="badge ${blocked ? "badge-red" : "badge-amber"}">${blocked ? "Falló · requiere revisión" : "En espera"}</span></div>${item.last_error ? `<p class="mt-2 text-sm ${blocked ? "font-semibold text-rose-800" : "text-amber-800"}">${h(queueErrorText(item))}</p>` : ""}${actions}</article>`;
+}
+
 function renderShell() {
   if (!state.session || !state.user) return;
   authScreen.classList.add("hidden");
@@ -299,7 +351,7 @@ function renderShell() {
   const top = `
     <header class="sticky top-0 z-30 border-b border-slate-100 bg-sand-50/95 backdrop-blur safe-top">
       <div class="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
-        <div class="flex items-center gap-2.5"><img src="./icon.svg" class="h-10 w-10 rounded-xl" alt="" /><div><p class="text-[10px] font-extrabold uppercase tracking-[.17em] text-teal-700">Intelia</p><p class="text-lg font-extrabold leading-5">Mi Caja</p></div></div>
+        <div class="flex items-center gap-2.5"><img src="./icon.svg" class="h-10 w-10 rounded-xl" alt="" /><p class="text-lg font-extrabold leading-5">Mi Caja</p></div>
         <div class="flex items-center gap-3">
           <div class="hidden items-center gap-3 sm:flex">${networkStatus}${pending ? `<span class="badge badge-amber">${pending} pendiente${pending === 1 ? "" : "s"}</span>` : ""}<button data-action="sync" class="btn-quiet" ${!isOnline() || state.syncing ? "disabled" : ""}>${icon("refresh", 16)} Sincronizar</button></div>
           <button data-action="logout" class="btn-quiet" aria-label="Salir">${icon("logout", 17)}<span class="hidden sm:inline">Salir</span></button>
@@ -403,7 +455,7 @@ function renderMovementForm() {
         </form>
       </section>
       <aside class="space-y-5">
-        <section class="card"><h3 class="font-extrabold">Pendientes guardados</h3><p class="mt-1 text-sm text-slate-500">Se envían en orden cuando vuelve internet.</p>${state.pending.length ? `<div class="mt-4 space-y-3">${state.pending.map((item) => `<div class="rounded-xl border border-slate-100 p-3"><div class="flex items-start justify-between gap-2"><div><p class="text-sm font-bold">${h(queuedLabel(item))}</p><p class="text-xs text-slate-500">${dateText(queuedDate(item))} · ${money(queuedAmount(item))}</p><p class="mt-1 text-[11px] text-slate-400">Folio: ${h(item.payload.p_id)}</p></div><span class="badge ${item.status === "blocked" ? "badge-red" : "badge-amber"}">${item.status === "blocked" ? "Revisar" : "En espera"}</span></div>${item.last_error ? `<p class="mt-2 text-xs text-rose-700">${h(friendlyError(item.last_error))}</p>` : ""}<div class="mt-2 flex gap-2">${item.status === "blocked" ? `<button class="btn-quiet px-2 py-1 text-xs" data-action="retry-queue" data-id="${h(item.id)}">Reintentar</button>` : ""}<button class="btn-quiet px-2 py-1 text-xs text-rose-700" data-action="discard-queue" data-id="${h(item.id)}">Quitar del dispositivo</button></div></div>`).join("")}</div>` : `<p class="mt-4 text-sm text-slate-400">No hay pendientes guardados.</p>`}</section>
+        <section class="card"><h3 class="font-extrabold">Pendientes guardados</h3><p class="mt-1 text-sm text-slate-500">Se envían en orden de fecha. Si uno falla, verás el motivo y podrás corregirlo o descartarlo; los demás también se intentarán enviar.</p>${state.pending.length ? `<div class="mt-4 space-y-3">${state.pending.map(renderQueueEntry).join("")}</div>` : `<p class="mt-4 text-sm text-slate-400">No hay pendientes guardados.</p>`}</section>
         <section class="rounded-2xl border border-blue-100 bg-blue-50 p-5"><h3 class="font-extrabold text-blue-900">Un folio por movimiento</h3><p class="mt-2 text-sm leading-6 text-blue-800">Si la señal falla al enviar, volveremos a intentar el mismo folio y los mismos datos para que no se duplique.</p></section>
       </aside>
     </div>
@@ -763,10 +815,12 @@ async function syncQueue() {
   state.syncing = true;
   renderShell();
   let syncedCount = 0;
+  let rejectedCount = 0;
+  let firstRejected = "";
   try {
     let rows = (await storeGetAll("queue")).filter((item) => item.owner_id === state.user.id).sort((a,b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
     for (const item of rows) {
-      if (item.status === "blocked") break;
+      if (item.status === "blocked") continue;
       try {
         const { error } = await supabase.rpc(item.action === "loan" ? "crear_prestamo" : "registrar_transaccion", item.payload);
         if (error) throw error;
@@ -777,9 +831,13 @@ async function syncQueue() {
           await storePut("queue", { ...item, status: "pending", last_error: error.message || String(error) });
           break;
         }
+        if (!isDefinitiveServerRejection(error)) {
+          await storePut("queue", { ...item, status: "pending", last_error: error.message || String(error) });
+          break;
+        }
         await storePut("queue", { ...item, status: "blocked", last_error: error.message || String(error) });
-        toast(`Un registro necesita revisión: ${friendlyError(error)}`, "error");
-        break;
+        rejectedCount += 1;
+        if (!firstRejected) firstRejected = `${queuedLabel(item)} del ${dateText(queuedDate(item))}: ${queueErrorText({ ...item, last_error: error.message || String(error) })}`;
       }
     }
   } catch (error) {
@@ -788,8 +846,86 @@ async function syncQueue() {
     state.syncing = false;
     await refreshPending();
     if (syncedCount) toast(`${syncedCount} registro${syncedCount === 1 ? "" : "s"} sincronizado${syncedCount === 1 ? "" : "s"} correctamente.`, "success");
+    if (rejectedCount) toast(`${rejectedCount} movimiento${rejectedCount === 1 ? "" : "s"} requiere${rejectedCount === 1 ? "" : "n"} revisión. ${firstRejected} Los otros pendientes también se intentaron enviar.`, "error");
     if (isOnline()) await refreshData();
   }
+}
+
+async function correctQueuedItem(form) {
+  const rows = await storeGetAll("queue");
+  const item = rows.find((row) => row.id === form.dataset.queueCorrection && row.owner_id === state.user?.id);
+  if (!item || item.status !== "blocked") { toast("Ese pendiente ya no está disponible para corregir.", "error"); return; }
+  if (/p_id ya fue usado/i.test(String(item.last_error || ""))) { toast(queueErrorText(item), "error"); return; }
+  const data = new FormData(form);
+  const payload = { ...item.payload };
+  const cycle = state.cycles.find((row) => row.id === payload.p_ciclo_id);
+  if (!cycle) { toast("No aparece el ciclo de este movimiento. Conéctate para actualizar la información y vuelve a intentar.", "error"); return; }
+  const note = String(data.get("note") || "").trim() || null;
+  if (note && note.length > 1000) { toast("La nota no puede tener más de 1,000 caracteres.", "error"); return; }
+  if (item.action === "loan") {
+    const participantId = String(data.get("participant_id") || "");
+    const participant = state.people.find((person) => person.id === participantId);
+    const capital = Number(data.get("capital"));
+    const weeks = Number(data.get("weeks"));
+    const date = String(data.get("date") || "");
+    const method = String(data.get("method") || "");
+    const validation = validateSaturdayAndCycle(date, cycle, "La fecha de entrega");
+    if (validation) { toast(validation, "error"); return; }
+    if (!participant || participant.estatus !== "activo") { toast("Elige a una persona activa para este préstamo.", "error"); return; }
+    if (!Number.isFinite(capital) || capital <= 0 || capital > MAX_DB_AMOUNT || Math.round(capital * 100) !== capital * 100) { toast("El capital debe ser mayor que cero y tener máximo dos decimales.", "error"); return; }
+    if (!Number.isInteger(weeks) || weeks < 1 || weeks > 52 || addDays(date, weeks * 7) > cycle.fecha_fin) { toast("Revisa el plazo: debe ser de 1 a 52 semanas y terminar antes del cierre del ciclo.", "error"); return; }
+    if (!["efectivo", "transferencia"].includes(method)) { toast("Elige efectivo o transferencia como forma de pago.", "error"); return; }
+    if (participant.tipo === "externo") {
+      const outstanding = state.loans.filter((loan) => loan.participante_id === participant.id && loan.estado === "activo").reduce((sum, loan) => sum + loanCapitalBalance(loan), 0);
+      if (outstanding + capital > Number(participant.limite_credito || 0)) { toast(`El préstamo superaría el límite de crédito de ${money(participant.limite_credito)}.`, "error"); return; }
+    }
+    payload.p_participante_id = participantId;
+    payload.p_capital = Number(capital.toFixed(2));
+    payload.p_plazo_semanas = weeks;
+    payload.p_fecha_desembolso = date;
+    payload.p_metodo_pago = method;
+    payload.p_nota = note;
+    if (!window.confirm(`Se corregirá el préstamo de ${participant.nombre} por ${money(capital)} a ${weeks} semanas. Se conservará el mismo folio (${payload.p_id}) y se volverán a revisar las reglas del ciclo. ¿Continuar?`)) return;
+  } else {
+    const kind = String(data.get("kind") || "");
+    const participantId = String(data.get("participant_id") || "") || null;
+    const loanId = String(data.get("loan_id") || "") || null;
+    const date = String(data.get("date") || "");
+    const amount = Number(data.get("amount"));
+    const method = String(data.get("method") || "");
+    const validation = validateSaturdayAndCycle(date, cycle, "La fecha del movimiento");
+    if (validation) { toast(validation, "error"); return; }
+    if (!["ahorro_semanal", "abono_prestamo", "pago_multa", "retiro_caja", "gasto", "ajuste_ingreso", "ajuste_egreso"].includes(kind)) { toast("Elige un tipo de movimiento válido.", "error"); return; }
+    if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_DB_AMOUNT || Math.round(amount * 100) !== amount * 100) { toast("El monto debe ser mayor que cero y tener máximo dos decimales.", "error"); return; }
+    if (!["efectivo", "transferencia"].includes(method)) { toast("Elige efectivo o transferencia como forma de pago.", "error"); return; }
+    const needsPerson = ["ahorro_semanal", "abono_prestamo", "pago_multa"].includes(kind);
+    let participant = state.people.find((person) => person.id === participantId);
+    if (kind === "abono_prestamo") {
+      const loan = state.loans.find((row) => row.id === loanId && row.ciclo_id === cycle.id);
+      if (!loan) { toast("Elige un préstamo de este ciclo para registrar el abono.", "error"); return; }
+      if (amount > loanBalance(loan) + 0.001) { toast("El abono supera lo que queda por pagar en ese préstamo.", "error"); return; }
+      participant = state.people.find((person) => person.id === loan.participante_id);
+      payload.p_prestamo_id = loan.id;
+      payload.p_participante_id = loan.participante_id;
+    } else {
+      if (kind !== "abono_prestamo" && loanId) { toast("Quita el préstamo relacionado porque este movimiento no es un abono.", "error"); return; }
+      payload.p_prestamo_id = null;
+      payload.p_participante_id = needsPerson ? participantId : null;
+    }
+    if (needsPerson && !participant) { toast("Elige a una persona relacionada con este movimiento.", "error"); return; }
+    if (kind === "ahorro_semanal" && participant?.tipo !== "socio") { toast("El ahorro semanal solo se registra para socios.", "error"); return; }
+    payload.p_tipo_movimiento = kind;
+    payload.p_monto = Number(amount.toFixed(2));
+    payload.p_fecha_operacion = date;
+    payload.p_metodo_pago = method;
+    payload.p_nota = note;
+    const personName = participant?.nombre || "No aplica";
+    if (!window.confirm(`Se corregirá ${movementLabels[kind]} por ${money(amount)} para ${personName}, el ${dateText(date)}. Se conservará el mismo folio (${payload.p_id}) y se volverán a revisar las reglas del ciclo. ¿Continuar?`)) return;
+  }
+  await storePut("queue", { ...item, payload, status: "pending", last_error: null });
+  await refreshPending();
+  toast(isOnline() ? "Corrección guardada. Se intentará enviar ahora con el mismo folio." : "Corrección guardada en este teléfono; se enviará cuando vuelva internet.", "success");
+  if (isOnline()) await syncQueue();
 }
 
 async function createPerson(form) {
@@ -983,11 +1119,15 @@ function handleClick(event) {
   if (action === "whatsapp") { const person = state.people.find((row) => row.id === button.dataset.person); if (person) whatsappLink(person, Number(button.dataset.amount)); return; }
   if (action === "select-cycle") { state.selectedCycleId = button.dataset.id; state.view = "inicio"; renderShell(); if (isOnline()) refreshData(); return; }
   if (action === "discard-queue") {
+    const item = state.pending.find((row) => row.id === button.dataset.id);
+    if (!item || item.status !== "blocked" || /p_id ya fue usado/i.test(String(item.last_error || ""))) { toast("Solo puedes descartar un movimiento que el servidor rechazó. Revisa el folio si el mensaje indica que ya fue usado.", "error"); return; }
     if (!window.confirm("¿Quitar este movimiento guardado de este dispositivo? No se enviará al servidor.")) return;
     storeDelete("queue", button.dataset.id).then(refreshPending).catch((error) => toast(friendlyError(error), "error")); return;
   }
   if (action === "retry-queue") {
-    storeGetAll("queue").then((rows) => rows.find((row) => row.id === button.dataset.id)).then((row) => row && storePut("queue", { ...row, status: "pending", last_error: null })).then(syncQueue).catch((error) => toast(friendlyError(error), "error")); return;
+    const item = state.pending.find((row) => row.id === button.dataset.id);
+    if (!item || item.status !== "blocked" || /p_id ya fue usado/i.test(String(item.last_error || ""))) { toast("Este folio necesita revisarse antes de volver a enviarse.", "error"); return; }
+    storePut("queue", { ...item, status: "pending", last_error: null }).then(refreshPending).then(syncQueue).catch((error) => toast(friendlyError(error), "error")); return;
   }
 }
 
@@ -1010,6 +1150,7 @@ async function handleSubmit(event) {
     else if (form.id === "cycle-form") await createCycle(form);
     else if (form.id === "loan-form") await createLoan(form);
     else if (form.id === "close-week-form") await closeSaturday(form);
+    else if (form.dataset.queueCorrection) await correctQueuedItem(form);
   } catch (error) {
     toast(friendlyError(error), "error");
   } finally {

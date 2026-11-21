@@ -1,4 +1,4 @@
-# Mi Caja · Intelia
+# Mi Caja
 
 Aplicación web privada para administrar una caja de ahorro y una cartera de préstamos. Está hecha con HTML, JavaScript y Tailwind CSS; el cliente Supabase se empaqueta localmente para que la pantalla de acceso y la app instalada sigan abriendo sin internet.
 
@@ -29,18 +29,11 @@ npx http-server dist -p 4173
 
 Abre `http://localhost:4173`. Para probar el modo sin conexión, abre la app una vez con internet, inicia sesión y deja que cargue los datos antes de activar el modo avión.
 
-## Publicación web
+## Publicación web en GitHub Pages
 
-El bucket `mi-caja-web` de Supabase contiene únicamente archivos estáticos de la interfaz. No contiene datos financieros. Su URL pública actual entrega `index.html` como texto plano, por lo que no debe usarse como enlace de la aplicación hasta corregir el tipo de contenido o publicarla con un host de sitios estáticos.
+El workflow `.github/workflows/deploy-pages.yml` compila el proyecto con `npm ci` y `npm run build`, valida los archivos de `dist/` y publica ese artefacto cuando hay un push a `main`. En GitHub, selecciona **Settings → Pages → Build and deployment → Source → GitHub Actions**. La página esperada es `https://erickgotze98-bot.github.io/caja-ahorro-intelia/`.
 
-El proyecto está preparado para Vercel. Importa el repositorio privado y usa:
-
-- Build command: `npm run build`
-- Output directory: `dist`
-- Install command: `npm install`
-
-La página publicada puede abrir la pantalla de acceso sin iniciar sesión. Los datos requieren sesión de Supabase; las tablas aplican RLS por `owner_id`.
-
+La página publicada abre la pantalla de acceso. Los datos requieren sesión de Supabase; las tablas aplican RLS por `owner_id`.
 ## Instalar como PWA o preparar Capacitor
 
 En Chrome o Safari del celular, abre el enlace publicado y usa **Añadir a pantalla de inicio** / **Add to Home Screen**. El inicio sin conexión sirve el cascarón guardado; la sesión debe haberse abierto antes en ese dispositivo.
@@ -58,7 +51,7 @@ npx cap sync
 ## Notas de operación
 
 - Las fechas de operación y de cierre deben ser sábado, no pueden ser futuras y tienen que pertenecer al ciclo abierto.
-- No se permite saltar cierres semanales. Si falla la red durante un envío, la cola vuelve a intentar el mismo `p_id`; si el servidor rechaza el movimiento, lo marca para revisión y detiene los posteriores hasta resolverlo.
+- No se permite saltar cierres semanales. Si falla la red durante un envío, la cola vuelve a intentar el mismo `p_id` con los mismos datos. Si Supabase rechaza un movimiento, muestra cuál falló y el motivo, permite corregirlo o descartarlo y continúa con los demás pendientes.
 - La cola se guarda en el almacenamiento local del dispositivo. Cerrar sesión no la envía; al volver a entrar con la misma cuenta y recuperar internet, se puede sincronizar.
 - La app pide al navegador permiso para marcar su almacenamiento local como persistente cuando está disponible. Aun así, la cola offline depende del espacio y las políticas del dispositivo; conéctate y sincroniza los pendientes con frecuencia.
 - Los préstamos, altas de personas/ciclos, anulaciones y cierres requieren conexión. Los abonos y otros movimientos sí se pueden dejar en cola.
