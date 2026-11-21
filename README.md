@@ -4,14 +4,13 @@ Aplicación web privada para administrar una caja de ahorro y una cartera de pr�
 
 ## Qué incluye
 
-- Inicio de sesión con Supabase Auth; el frontend no muestra una opción de registro.
-- La interfaz bloquea el acceso hasta cambiar la contraseña cuando `user_metadata.must_change_password` sea `true`. Ese marcador vive en metadatos que el usuario puede modificar: controla la interfaz, pero no es una barrera de autorización del servidor. Para exigirlo también en el backend se necesita una marca administrada por el servidor y validarla desde las RPC o un Auth Hook.
-- Lectura de datos bajo la sesión `authenticated` y las políticas RLS del proyecto.
-- Altas de ciclos y personas únicamente con los permisos de sus tablas; los movimientos, préstamos, anulaciones y cierres usan las funciones RPC del backend.
-- Tasa fija de 5%, cierre de sábados consecutivos, tolerancia de $10, conciliación de efectivo y banco y reparto proporcional calculado por `cerrar_ciclo`.
-- Cola IndexedDB, separada por cuenta, que conserva el `p_id` y los datos originales de cada movimiento pendiente.
-- Acceso a recordatorios de WhatsApp; el teléfono se solicita al abrir el enlace y no se guarda.
-- PWA con caché del cascarón y acceso para instalar en la pantalla de inicio del celular.
+- Inicio de sesión obligatorio con Supabase Auth y cambio de contraseña actual verificada antes de continuar.
+- Menú de cuenta, historial anual de cajas, resumen financiero y vistas separadas para movimientos, pendientes, contactos, préstamos, ingresos y cierre de sábado.
+- Los contactos se crean como socios de forma predeterminada. Los contactos externos se crean al prestarles y se muestran con la etiqueta “No participa en caja”.
+- Tasa fija de 5%, cierres consecutivos de sábado, tolerancia de $10 y reparto proporcional calculado por el backend.
+- Cola IndexedDB por cuenta, con el mismo `p_id` y datos originales. Los movimientos rechazados muestran la causa y permiten corregirlos o descartarlos; un rechazo no detiene el envío de los siguientes.
+- Los teléfonos se guardan localmente en el dispositivo para abrir recordatorios de WhatsApp. El esquema actual de Supabase no tiene una columna para esos teléfonos.
+- PWA con caché del cascarón, compilación con rutas relativas y acceso para instalar en el celular.
 
 ## Llave de Supabase
 
@@ -50,7 +49,7 @@ npx cap sync
 
 ## Notas de operación
 
-- Las fechas de operación y de cierre deben ser sábado, no pueden ser futuras y tienen que pertenecer al ciclo abierto.
+- Las fechas de movimientos y cierres deben ser sábado, no pueden ser futuras y deben pertenecer a la caja abierta. El ingreso a caja aún hereda esta regla; para permitir otras fechas se debe cambiar la RPC del backend.
 - No se permite saltar cierres semanales. Si falla la red durante un envío, la cola vuelve a intentar el mismo `p_id` con los mismos datos. Si Supabase rechaza un movimiento, muestra cuál falló y el motivo, permite corregirlo o descartarlo y continúa con los demás pendientes.
 - La cola se guarda en el almacenamiento local del dispositivo. Cerrar sesión no la envía; al volver a entrar con la misma cuenta y recuperar internet, se puede sincronizar.
 - La app pide al navegador permiso para marcar su almacenamiento local como persistente cuando está disponible. Aun así, la cola offline depende del espacio y las políticas del dispositivo; conéctate y sincroniza los pendientes con frecuencia.
