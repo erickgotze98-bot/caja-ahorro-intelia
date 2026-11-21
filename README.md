@@ -4,10 +4,10 @@ Aplicación web privada para administrar una caja de ahorro y una cartera de pr�
 
 ## Qué incluye
 
-- Inicio de sesión obligatorio con Supabase Auth y cambio de contraseña actual verificada antes de continuar. El bloqueo por `must_change_password` es de interfaz; el backend debe reforzarse aparte si se requiere que nadie pueda evitarlo llamando directamente a la API.
-- Menú de cuenta, historial anual de cajas, resumen financiero y vistas separadas para movimientos, pendientes, contactos, préstamos, ingresos y cierre de sábado.
+- Inicio de sesión obligatorio con Supabase Auth y cambio de contraseña actual verificada antes de continuar. Al volver a la pestaña, la app vuelve a comprobar la sesión y conserva el bloqueo de cambio obligatorio.
+- Menú de cuenta, historial anual de cajas, resumen financiero y vistas separadas para movimientos, pendientes, contactos, préstamos e ingresos.
 - Los contactos se crean como socios de forma predeterminada. Los contactos externos se crean al prestarles y se muestran con la etiqueta “No participa en caja”.
-- Tasa fija de 5%, ingresos a caja en cualquier día dentro de una temporada abierta, cierres consecutivos de sábado, tolerancia de $10 y reparto proporcional calculado por el backend.
+- Tasa fija de 5%, ingresos a caja en cualquier día dentro de una temporada abierta y una sola conciliación final de efectivo y banco al entregar, con tolerancia de $10 y reparto proporcional calculado por el backend.
 - Cola IndexedDB por cuenta, con el mismo `p_id` y datos originales. Los movimientos rechazados muestran la causa y permiten corregirlos o descartarlos; un rechazo no detiene el envío de los siguientes.
 - Los teléfonos se guardan localmente en el dispositivo para abrir recordatorios de WhatsApp. El esquema actual de Supabase no tiene una columna para esos teléfonos.
 - PWA con caché del cascarón, compilación con rutas relativas y acceso para instalar en el celular.
@@ -49,9 +49,9 @@ npx cap sync
 
 ## Notas de operación
 
-- Los préstamos, abonos, movimientos generales y cierres deben tener fecha de sábado. Los ingresos a caja pueden llevar cualquier fecha pasada dentro de la temporada abierta, siempre que su periodo no se haya cerrado ya. Aplica la migración `supabase/migrations/20261121130000_income_any_day.sql` en el SQL Editor de Supabase antes de usar esta opción.
+- Los préstamos, abonos y movimientos generales deben tener fecha de sábado. Los ingresos a caja pueden llevar cualquier fecha pasada dentro de la temporada abierta. Las temporadas se entregan con un conteo final de efectivo y banco; no se hacen cierres semanales. Aplica las migraciones `20261121130000_income_any_day.sql` y `20261121150000_close_season_once.sql` en el SQL Editor antes de usar estas funciones.
 - La migración habilita las RPC `registrar_aportacion_cualquier_dia` y `anular_aportacion_cualquier_dia`; el resto de movimientos conserva el camino y la regla de sábado actuales. La vista semanal asigna las aportaciones de cada día al sábado que sigue.
-- No se permite saltar cierres semanales. Si falla la red durante un envío, la cola vuelve a intentar el mismo `p_id` con los mismos datos. Si Supabase rechaza un movimiento, muestra cuál falló y el motivo, permite corregirlo o descartarlo y continúa con los demás pendientes.
+- La conciliación se hace una sola vez al final de cada temporada; la base exige explicar diferencias mayores a $10 y no permite entregar con préstamos abiertos o sin ahorros para repartir. Si falla la red durante un envío, la cola vuelve a intentar el mismo `p_id` con los mismos datos. Si Supabase rechaza un movimiento, muestra cuál falló y el motivo, permite corregirlo o descartarlo y continúa con los demás pendientes.
 - La cola se guarda en el almacenamiento local del dispositivo. Cerrar sesión no la envía; al volver a entrar con la misma cuenta y recuperar internet, se puede sincronizar.
 - La app pide al navegador permiso para marcar su almacenamiento local como persistente cuando está disponible. Aun así, la cola offline depende del espacio y las políticas del dispositivo; conéctate y sincroniza los pendientes con frecuencia.
 - Los préstamos, altas de personas/ciclos, anulaciones y cierres requieren conexión. Los abonos y otros movimientos sí se pueden dejar en cola.

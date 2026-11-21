@@ -2,21 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: light; font-synthesis: none; }
+:root { color-scheme: light; font-synthesis: none; --forest: #0f5b44; --forest-deep: #084b39; --mint: #a2e5c8; --gold: #f2bd4c; }
 html { scroll-behavior: smooth; }
-body { min-width: 320px; }
+body { min-width: 320px; background: #f2f5f3; }
 input, select, textarea, button { font: inherit; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 .safe-bottom { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
 .safe-top { padding-top: max(1rem, env(safe-area-inset-top)); }
-.field { @apply mt-1 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-ink outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-100; }
+#app-screen { background: #f2f5f3; min-height: 100vh; }
+.field { @apply mt-1 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-ink outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-100; }
 .field-label { @apply block text-sm font-semibold text-slate-700; }
-.btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-teal-700 active:scale-[.99]; }
-.btn-secondary { @apply inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-ink transition hover:bg-slate-50; }
-.btn-quiet { @apply inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100; }
+.btn-primary { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-forest-700 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-forest-800 active:scale-[.99]; }
+.btn-secondary { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-ink transition hover:bg-slate-50; }
+.btn-quiet { @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100; }
 .card { @apply rounded-2xl border border-slate-100 bg-white p-5 shadow-soft; }
-.nav-item { @apply flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-500 transition hover:bg-teal-50 hover:text-teal-700; }
-.nav-item.active { @apply bg-teal-50 text-teal-700; }
+.nav-item { @apply flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-500 transition hover:bg-emerald-50 hover:text-forest-700; }
+.nav-item.active { @apply bg-emerald-50 text-forest-700; }
 .table-wrap { @apply overflow-x-auto rounded-xl border border-slate-100; }
 .table { @apply min-w-full divide-y divide-slate-100 text-left text-sm; }
 .table th { @apply whitespace-nowrap bg-slate-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-slate-500; }
@@ -28,3 +29,106 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .badge-red { @apply bg-rose-50 text-rose-700; }
 .badge-gray { @apply bg-slate-100 text-slate-600; }
 .empty { @apply rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500; }
+
+.app-header { background: rgba(242,245,243,.94); border-bottom: 1px solid rgba(15,91,68,.08); backdrop-filter: blur(16px); }
+.icon-button { position: relative; display: inline-flex; width: 44px; height: 44px; flex: 0 0 auto; align-items: center; justify-content: center; border: 1px solid #e2eae5; border-radius: 15px; background: #fff; color: #466157; box-shadow: 0 2px 8px rgba(17,57,42,.04); }
+.icon-button:hover, .icon-button.active { color: var(--forest); background: #e7f4ee; }
+.alert-button { margin-right: 2px; }
+.alert-count { position: absolute; top: -5px; right: -5px; min-width: 19px; height: 19px; border: 2px solid #f2f5f3; border-radius: 999px; background: #c0392b; color: white; font-size: 10px; line-height: 15px; text-align: center; font-weight: 800; padding: 0 4px; }
+.balance-card { border-radius: 27px; padding: 23px 22px 18px; color: #fff; background: linear-gradient(145deg,#126247 0%,#07543d 100%); box-shadow: 0 12px 26px rgba(9,82,59,.16); }
+.balance-eyebrow { font-size: 14px; color: rgba(255,255,255,.8); }
+.balance-value { margin-top: 3px; font-size: clamp(2.35rem, 11vw, 3rem); line-height: 1.04; font-weight: 850; letter-spacing: -.055em; }
+.balance-caption { margin-top: 8px; font-size: 13px; color: rgba(255,255,255,.78); }
+.balance-track { display: flex; height: 16px; overflow: hidden; margin-top: 20px; border-radius: 99px; background: rgba(255,255,255,.15); }
+.balance-in { min-width: 0; background: #a2e5c8; transition: width .2s ease; }
+.balance-loaned { min-width: 0; background: repeating-linear-gradient(135deg,#f6c65c 0 7px,#dfa935 7px 14px); transition: width .2s ease; }
+.balance-legend { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 9px 14px; margin-top: 9px; font-size: 11px; font-weight: 700; color: rgba(255,255,255,.86); }
+.balance-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend-dot { width: 9px; height: 9px; border-radius: 3px; }
+.legend-mint { background: #a2e5c8; }
+.legend-gold { background: #f2bd4c; }
+.balance-date { margin-top: 13px; color: rgba(255,255,255,.58); font-size: 10px; }
+.finance-grid { display: grid; grid-template-columns: 1fr; gap: 9px; }
+.finance-card { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 17px; border: 1px solid #e6ece8; border-radius: 19px; background: #fff; box-shadow: 0 4px 14px rgba(22,54,41,.035); }
+.finance-card > p { font-size: 13px; color: #627169; }
+.finance-card > strong { color: #183d30; font-size: 25px; line-height: 1.15; letter-spacing: -.03em; }
+.finance-card > span { color: #758078; font-size: 12px; line-height: 1.45; }
+.finance-card .finance-green { color: #16805f; }
+.loan-finance-card { position: relative; border-color: #f1d597; }
+.loan-finance-card::after { content: ''; position: absolute; top: 18px; right: 17px; width: 9px; height: 9px; border: 1px solid #718178; border-width: 0 1px 1px 0; transform: rotate(45deg); }
+.interest-details { margin-top: 5px; border-top: 1px solid #edf0ed; padding-top: 10px; font-size: 12px; }
+.interest-details summary { color: #486056; cursor: pointer; font-weight: 700; }
+.interest-total { margin-top: 9px; font-size: 15px; font-weight: 800; color: #ab7510; }
+.interest-details > span { color: #78837c; }
+.interest-row { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid #edf0ed; padding: 8px 0; color: #64736a; }
+.interest-row strong { color: #304a3f; }
+.movements-callout { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid #e3ebe6; border-radius: 19px; background: white; padding: 17px; }
+.movements-callout h2 { font-weight: 800; color: #183d30; }
+.movements-callout p { margin-top: 3px; font-size: 13px; color: #758078; }
+
+.bottom-nav { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); border-top: 1px solid #e4eae6; background: rgba(255,255,255,.97); box-shadow: 0 -8px 24px rgba(30,54,42,.07); padding: 7px 6px max(7px, env(safe-area-inset-bottom)); }
+.bottom-nav-item { min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 5px 2px 3px; border-radius: 13px; color: #718078; font-size: 10px; font-weight: 600; }
+.bottom-nav-item.active { color: var(--forest); font-weight: 800; }
+.bottom-nav-item.active svg { padding: 4px; width: 30px; height: 25px; border-radius: 999px; background: #e3f3eb; }
+.drawer-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(17,35,27,.33); backdrop-filter: blur(2px); }
+.drawer-panel { position: absolute; inset: 0 auto 0 0; width: min(88vw,390px); overflow-y: auto; background: #f8faf8; padding: 24px 20px; box-shadow: 15px 0 44px rgba(17,35,27,.16); }
+.menu-link { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-radius: 14px; padding: 12px 13px; background: #edf5f0; color: var(--forest); font-weight: 750; }
+.menu-link > span:first-child { display: flex; align-items: center; gap: 10px; }
+.profile-section,.history-peek { border: 1px solid #e4ebe6; border-radius: 16px; background: white; padding: 15px; }
+.history-peek { background: #f0f7f3; }
+.due-card,.loan-card,.contact-card,.season-card,.final-count-card,.attention-card { border: 1px solid #e4ebe6; border-radius: 19px; background: white; padding: 17px; box-shadow: 0 4px 14px rgba(22,54,41,.035); }
+.due-card { border-left: 4px solid #d7a331; }
+.due-detail { display: grid; gap: 7px; color: #5e6c64; font-size: 13px; line-height: 1.5; }
+.due-detail strong { color: #334a3e; }
+.badge-both { background: #e8eafa; color: #544b9c; }
+.attention-card { border-color: #f1c5c5; background: #fffafa; }
+.contact-card.external,.loan-card.external { border-left: 4px solid #e2b34d; }
+.contact-heading { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 14px; text-align: left; }
+.contact-details { margin-top: 14px; border-top: 1px solid #edf0ed; padding-top: 15px; }
+.movement-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #edf0ed; border-radius: 13px; padding: 11px 12px; font-size: 13px; }
+.person-form { display: grid; gap: 13px; border-top: 1px solid #e9eeea; padding-top: 16px; }
+.search-form { width: min(100%, 360px); }
+.search-box { display: flex; min-height: 46px; align-items: center; gap: 9px; border: 1px solid #dfe7e1; border-radius: 14px; background: #fff; padding: 0 12px; color: #708077; }
+.search-box input { width: 100%; min-width: 0; border: 0; outline: 0; color: #183d30; background: transparent; font-size: 14px; }
+.loan-numbers { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
+.loan-numbers > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; border-radius: 12px; background: #f5f8f6; padding: 10px; }
+.loan-numbers span,.season-stats span,.expected-grid span { color: #748178; font-size: 11px; }
+.loan-numbers strong { overflow-wrap: anywhere; color: #29483a; font-size: 14px; }
+.collection-person { border: 1px solid #e1e9e3; border-radius: 20px; background: #eaf5ef; padding: 17px; }
+.payment-section { border: 1px solid #e9eeea; border-radius: 16px; background: #fbfcfb; padding: 15px; }
+.interest-preview { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px 12px; border-radius: 13px; background: #fff8e8; padding: 13px; color: #786137; font-size: 13px; }
+.interest-preview strong { color: #805b16; text-align: right; }
+.payment-total { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; border-top: 1px solid #e4ebe6; padding-top: 13px; font-weight: 700; color: #455d50; }
+.payment-total strong { color: var(--forest); font-size: 21px; }
+.field-help { display: block; margin-top: 5px; color: #768179; font-size: 11px; font-weight: 400; line-height: 1.5; }
+.section-intro { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; color: #56675e; font-size: 13px; }
+.section-intro span { color: #849087; font-size: 12px; }
+.info-banner { border: 1px solid #ddebe3; border-radius: 14px; background: #eff7f2; padding: 12px 14px; color: #3d6350; font-size: 13px; line-height: 1.5; }
+.final-count-card { border-color: #e9d7a6; background: linear-gradient(135deg,#fffdf7,#fff); }
+.expected-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.expected-grid > div { display: flex; flex-direction: column; gap: 3px; border: 1px solid #e9ece6; border-radius: 13px; background: white; padding: 12px; }
+.expected-grid strong { color: #254535; font-size: 17px; }
+.season-card { border-color: #dce9e1; background: linear-gradient(155deg,#fff,#f8fcf9); }
+.eyebrow { color: #267453; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.season-stats { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+.season-stats > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; border-radius: 13px; background: #f1f7f3; padding: 11px; }
+.season-stats strong { color: #244836; font-size: 15px; }
+.history-list { display: grid; gap: 10px; }
+.history-card { border: 1px solid #e6ece8; border-radius: 15px; background: white; padding: 14px; }
+.empty-season { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 260px; border: 1px dashed #cfddd4; border-radius: 20px; background: #f8fbf9; padding: 28px; text-align: center; }
+.empty-season img { width: 42px; height: 42px; margin-bottom: 13px; }
+.empty-season h2 { color: #234936; font-size: 18px; font-weight: 800; }
+.empty-season p { margin-top: 7px; max-width: 340px; color: #718078; font-size: 14px; line-height: 1.5; }
+
+@media (min-width: 640px) {
+  .finance-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+  .balance-card { padding: 26px 26px 20px; }
+  .bottom-nav { left: 50%; right: auto; width: min(100%, 896px); transform: translateX(-50%); border-right: 1px solid #e4eae6; border-left: 1px solid #e4eae6; }
+  .drawer-panel { width: min(420px, 80vw); }
+}
+@media (max-width: 390px) {
+  .loan-numbers { grid-template-columns: 1fr; }
+  .season-stats { grid-template-columns: 1fr; }
+  .finance-card { padding: 15px; }
+  .balance-card { border-radius: 23px; padding: 20px 18px 16px; }
+}

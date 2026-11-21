@@ -1,4 +1,4 @@
-const CACHE_NAME = "mi-caja-shell-v5";
+const CACHE_NAME = "mi-caja-shell-v6";
 const SHELL = ["./index.html", "./manifest.webmanifest", "./icon.svg", "./styles.css", "./app.js"];
 
 self.addEventListener("install", (event) => {
