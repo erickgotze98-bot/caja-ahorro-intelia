@@ -33,6 +33,7 @@ const DB_NAME = "mi-caja-offline-v1";
 const DB_VERSION = 1;
 let dbPromise;
 let refreshPromise;
+let cancellingTransaction = false;
 
 function h(value = "") {
   return String(value ?? "").replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]);
@@ -640,6 +641,7 @@ async function startSession(session) {
     renderPasswordChange();
     return;
   }
+  requestPersistentStorage();
   appScreen.classList.remove("hidden");
   authScreen.classList.add("hidden");
   await loadCachedData();
@@ -871,17 +873,26 @@ async function createLoan(form) {
   if (state.pending.some((item) => item.id === payload.p_id && item.status === "pending")) toast("No se confirmó la respuesta de la red. El préstamo quedó guardado con el mismo folio para volver a intentar.", "info");
 }
 
-async function cancelTransaction(id) {
+async function cancelTransaction(id, button) {
+  if (cancellingTransaction) return;
   if (!isOnline()) { toast("Conéctate para anular un movimiento y guardar la explicación.", "error"); return; }
   const transaction = state.transactions.find((row) => row.id === id);
   if (!transaction || transaction.anulado) return;
   const reason = window.prompt("¿Por qué se anula este movimiento? Escribe al menos cinco caracteres.");
   if (reason === null) return;
   if (reason.trim().length < 5) { toast("La explicación debe tener al menos cinco caracteres.", "error"); return; }
-  const { error } = await supabase.rpc("anular_transaccion", { p_transaccion_id: id, p_motivo: reason.trim() });
-  if (error) { toast(friendlyError(error), "error"); return; }
-  toast("Movimiento anulado y guardado en la bitácora.", "success");
-  await refreshData();
+  if (!window.confirm(`Se anulará este movimiento y se guardará la explicación en la bitácora. No se puede borrar después.\n\nMotivo: ${reason.trim()}\n\n¿Confirmas la anulación?`)) return;
+  cancellingTransaction = true;
+  if (button) { button.disabled = true; button.textContent = "Anulando…"; }
+  try {
+    const { error } = await supabase.rpc("anular_transaccion", { p_transaccion_id: id, p_motivo: reason.trim() });
+    if (error) { toast(friendlyError(error), "error"); return; }
+    toast("Movimiento anulado y guardado en la bitácora.", "success");
+    await refreshData();
+  } finally {
+    cancellingTransaction = false;
+    if (button?.isConnected) { button.disabled = false; button.textContent = "Anular"; }
+  }
 }
 
 async function closeSaturday(form) {
@@ -950,7 +961,7 @@ function handleClick(event) {
   if (action === "navigate") { state.view = button.dataset.view || "inicio"; renderShell(); if (state.view === "sabado") refreshExpectedAndFlow().then(renderShell); return; }
   if (action === "logout") { logout(); return; }
   if (action === "sync") { syncQueue(); return; }
-  if (action === "cancel-tx") { cancelTransaction(button.dataset.id); return; }
+  if (action === "cancel-tx") { cancelTransaction(button.dataset.id, button); return; }
   if (action === "close-cycle") { closeCycle(); return; }
   if (action === "whatsapp") { const person = state.people.find((row) => row.id === button.dataset.person); if (person) whatsappLink(person, Number(button.dataset.amount)); return; }
   if (action === "select-cycle") { state.selectedCycleId = button.dataset.id; state.view = "inicio"; refreshData(); return; }
@@ -1025,3 +1036,9 @@ async function initialize() {
 }
 
 initialize();
+
+async function requestPersistentStorage() {
+  try {
+    if (navigator.storage?.persist) await navigator.storage.persist();
+  } catch { /* El navegador conserva el almacenamiento como mejor esfuerzo. */ }
+}

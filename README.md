@@ -31,7 +31,11 @@ Abre `http://localhost:4173`. Para probar el modo sin conexión, abre la app una
 
 ## Publicación web
 
-El proyecto está preparado para Vercel. Importa el repositorio privado y usa:
+Los archivos estáticos publicados se alojan en un bucket público de Supabase Storage. Ese bucket contiene únicamente el frontend (HTML, JavaScript, CSS e iconos); no contiene información financiera ni permite leer las tablas de la aplicación.
+
+La versión actual está publicada en: <https://gxqcybqrxvpqwrfsswae.supabase.co/storage/v1/object/public/mi-caja-web/index.html>. El bucket público permite que cualquier persona descargue estos archivos de interfaz; los datos de la caja siguen requiriendo iniciar sesión y pasan por RLS.
+
+El proyecto también está preparado para Vercel. Si se migra ahí, importa el repositorio privado y usa:
 
 - Build command: `npm run build`
 - Output directory: `dist`
@@ -58,5 +62,6 @@ npx cap sync
 - Las fechas de operación y de cierre deben ser sábado, no pueden ser futuras y tienen que pertenecer al ciclo abierto.
 - No se permite saltar cierres semanales. Si falla la red durante un envío, la cola vuelve a intentar el mismo `p_id`; si el servidor rechaza el movimiento, lo marca para revisión y detiene los posteriores hasta resolverlo.
 - La cola se guarda en el almacenamiento local del dispositivo. Cerrar sesión no la envía; al volver a entrar con la misma cuenta y recuperar internet, se puede sincronizar.
+- La app pide al navegador permiso para marcar su almacenamiento local como persistente cuando está disponible. Aun así, la cola offline depende del espacio y las políticas del dispositivo; conéctate y sincroniza los pendientes con frecuencia.
 - Los préstamos, altas de personas/ciclos, anulaciones y cierres requieren conexión. Los abonos y otros movimientos sí se pueden dejar en cola.
 - Las políticas RLS y las RPC son la autoridad final. El cliente ayuda con mensajes claros, pero no reemplaza las validaciones de la base de datos.

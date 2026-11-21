@@ -3,7 +3,7 @@
   "short_name": "Mi Caja",
   "description": "Caja de ahorro y préstamos",
   "lang": "es-MX",
-  "start_url": "./",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "background_color": "#fbfaf7",

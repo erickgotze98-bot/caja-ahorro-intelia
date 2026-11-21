@@ -1,5 +1,5 @@
-const CACHE_NAME = "mi-caja-shell-v1";
-const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg", "./styles.css", "./app.js"];
+const CACHE_NAME = "mi-caja-shell-v2";
+const SHELL = ["./index.html", "./manifest.webmanifest", "./icon.svg", "./styles.css", "./app.js"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
