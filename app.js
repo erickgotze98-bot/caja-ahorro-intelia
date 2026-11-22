@@ -121,6 +121,7 @@ function friendlyError(error) {
   if (lower.includes("arqueo debe ser secuencial") || lower.includes("arqueo debe ser secuencial")) return "Debes cerrar los sábados en orden. Revisa cuál fecha sigue.";
   if (lower.includes("requiere nota de ajuste")) return "La diferencia supera $10. Escribe una explicación de al menos cinco caracteres.";
   if (lower.includes("excede el saldo pendiente")) return "El abono es mayor que lo que falta por pagar.";
+  if (lower.includes("no se puede anular este abono porque hay pagos posteriores")) return "No se puede anular este pago porque ya hay abonos posteriores; así protegemos el cálculo de réditos que ya quedó guardado.";
   if (lower.includes("no se permite registrar un abono anterior")) return "Ese préstamo ya tiene un pago más reciente. Elige una fecha posterior para conservar el orden del cálculo.";
   if (lower.includes("saldo negativo") || lower.includes("saldos no pueden ser negativos")) return "Este movimiento dejaría el dinero disponible por debajo de cero.";
   if (lower.includes("el monto debe ser mayor") || lower.includes("maximo dos decimales") || lower.includes("máximo dos decimales")) return "Revisa que el monto sea mayor que cero y tenga máximo dos decimales.";
@@ -856,7 +857,15 @@ function renderGlobalCalendar() {
 function renderTransactionsTable(rows, allowCancel = false) {
   if (!rows.length) return emptyState("No hay movimientos en esta caja.");
   const sorted = [...rows].sort((a, b) => String(b.fecha_operacion).localeCompare(String(a.fecha_operacion)) || String(b.creado_at).localeCompare(String(a.creado_at)));
-  return `<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Movimiento</th><th>Persona</th><th>Forma de pago</th><th>Monto</th>${allowCancel ? "<th></th>" : ""}</tr></thead><tbody>${sorted.map((tx) => `<tr><td>${dateText(tx.fecha_operacion)}</td><td>${h(movementLabels[tx.tipo_movimiento] || tx.tipo_movimiento)}${tx.anulado ? ` <span class="badge badge-red">Anulado</span>` : ""}</td><td>${h(participantName(tx.participante_id))}</td><td>${h(paymentLabels[tx.metodo_pago] || tx.metodo_pago)}</td><td class="font-bold">${money(tx.monto)}</td>${allowCancel ? `<td>${!tx.anulado ? `<button class="btn-quiet text-rose-700" data-action="cancel-tx" data-id="${h(tx.id)}">Anular</button>` : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Movimiento</th><th>Persona</th><th>Forma de pago</th><th>Monto</th>${allowCancel ? "<th></th>" : ""}</tr></thead><tbody>${sorted.map((tx) => {
+    const hasLaterPayment = tx.tipo_movimiento === "abono_prestamo" && state.transactions.some((other) =>
+      other.id !== tx.id && other.prestamo_id === tx.prestamo_id && other.tipo_movimiento === "abono_prestamo"
+      && (String(other.fecha_operacion).localeCompare(String(tx.fecha_operacion)) > 0
+        || (String(other.fecha_operacion) === String(tx.fecha_operacion) && String(other.creado_at).localeCompare(String(tx.creado_at)) > 0)
+        || (String(other.fecha_operacion) === String(tx.fecha_operacion) && String(other.creado_at) === String(tx.creado_at) && String(other.id).localeCompare(String(tx.id)) > 0))
+    );
+    return `<tr><td>${dateText(tx.fecha_operacion)}</td><td>${h(movementLabels[tx.tipo_movimiento] || tx.tipo_movimiento)}${tx.anulado ? ` <span class="badge badge-red">Anulado</span>` : ""}</td><td>${h(participantName(tx.participante_id))}</td><td>${h(paymentLabels[tx.metodo_pago] || tx.metodo_pago)}</td><td class="font-bold">${money(tx.monto)}</td>${allowCancel ? `<td>${!tx.anulado ? hasLaterPayment ? `<span class="text-xs text-slate-500" title="Los abonos se corrigen del más reciente al más antiguo para no cambiar el cálculo de réditos guardado.">No se puede anular: hay pagos posteriores</span>` : `<button class="btn-quiet text-rose-700" data-action="cancel-tx" data-id="${h(tx.id)}">Anular</button>` : ""}</td>` : ""}</tr>`;
+  }).join("")}</tbody></table></div>`;
 }
 
 function whatsappLink(person) {

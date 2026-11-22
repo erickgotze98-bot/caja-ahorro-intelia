@@ -18,7 +18,7 @@ Aplicación web privada para administrar ahorros y préstamos. Usa HTML, JavaScr
 
 La app usa la Project URL y la llave publicable proporcionadas para Mi Caja. La llave publicable está pensada para clientes web. Nunca añadas la `service_role` key ni contraseñas al repositorio o al navegador. La protección de datos depende de Supabase Auth, funciones RPC con `p_id` y políticas RLS.
 
-Aplica las migraciones del repositorio en orden, incluida `20261121190000_interest_every_15_days.sql`, antes de usar los nuevos cálculos. Esta migración se detiene si detecta préstamos previos sin conciliación; revisa las cuentas existentes antes de reintentarla. En la base consultada para este cambio no había préstamos registrados.
+Aplica las migraciones del repositorio en orden, incluidas `20261121190000_interest_every_15_days.sql` y `20261121200000_guard_loan_annulment_order.sql`, antes de usar los nuevos cálculos. La primera se detiene si detecta préstamos previos sin conciliación; revisa las cuentas existentes antes de reintentarla. En la base consultada para este cambio no había préstamos registrados.
 
 ## Desarrollo local
 
@@ -56,5 +56,6 @@ npx cap sync
 
 - Las operaciones nuevas de préstamo requieren conexión. La cola offline conserva el folio idempotente para los abonos y movimientos permitidos.
 - El interés se reconoce en la base antes de registrar cada abono: 5% por cada periodo completo de 15 días sobre el capital pendiente. Una fecha de abono anterior a otro pago ya guardado se rechaza para no alterar el orden del cálculo.
+- Para mantener consistente el historial de réditos, los abonos de un préstamo se anulan del más reciente al más antiguo. La app bloquea el botón de anulación en pagos anteriores y Supabase aplica la misma regla.
 - La base sigue siendo la autoridad final para fechas, saldos, RLS, permisos e idempotencia. El frontend valida y explica los rechazos, pero no sustituye esas reglas.
 - Los datos de teléfono, preferencias de recordatorio y caché offline permanecen locales en cada dispositivo.
