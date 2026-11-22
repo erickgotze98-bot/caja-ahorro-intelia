@@ -13,8 +13,8 @@ const appScreen = document.querySelector("#app-screen");
 const toastRegion = document.querySelector("#toast-region");
 const viewNames = {
   inicio: "Resumen", prestamos: "Préstamos",
-  personas: "Contactos", alertas: "Alertas y pendientes", movimientos: "Movimientos",
-  cobrar: "Registrar pago", temporadas: "Historial de cajas"
+  personas: "Contactos", alertas: "Pendientes", movimientos: "Movimientos",
+  cobrar: "Registrar pago", temporadas: "Historial de cajas", calendario: "Calendario"
 };
 const movementLabels = {
   ahorro_semanal: "Ahorro semanal", abono_prestamo: "Abono a préstamo",
@@ -31,7 +31,8 @@ const state = {
   selectedPersonId: null, personSearch: "", selectedStatementMonth: "", statementPersonId: null, selectedLoanForPayment: null,
   showMovementForm: false, showPersonForm: false, loanPersonChoice: "", contactPhones: {},
   collectionPersonId: null, collectionReturnView: "alertas", contactFrequency: {},
-  calendarPersonId: null, personFilter: "all", missedWeeks: {}, isDemo: false
+  calendarPersonId: null, calendarCycleId: null, calendarMonth: "", calendarWeek: "", collectionDate: null,
+  personFilter: "all", missedWeeks: {}, isDemo: false
 };
 
 const DB_NAME = "mi-caja-offline-v1";
@@ -48,6 +49,16 @@ function h(value = "") {
 
 function money(value = 0) {
   return new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 2 }).format(Number(value) || 0);
+}
+
+function moneyInputValue(value) {
+  const normalized = String(value ?? "").trim().replace(/\s/g, "").replace(/\$/g, "").replace(/,/g, "");
+  if (!normalized || !/^-?\d*(?:\.\d*)?$/.test(normalized)) return 0;
+  return Number(normalized) || 0;
+}
+
+function moneyField(name, id, { value = "", required = false, placeholder = "0.00", extra = "" } = {}) {
+  return `<span class="money-input"><span aria-hidden="true">$</span><input class="field money-input-control" name="${h(name)}" ${id ? `id="${h(id)}"` : ""} type="text" inputmode="decimal" autocomplete="off" data-money-input ${required ? "required" : ""} value="${h(value)}" placeholder="${h(placeholder)}" ${extra} /></span>`;
 }
 
 function dateText(value) {
@@ -110,6 +121,7 @@ function friendlyError(error) {
   if (lower.includes("arqueo debe ser secuencial") || lower.includes("arqueo debe ser secuencial")) return "Debes cerrar los sábados en orden. Revisa cuál fecha sigue.";
   if (lower.includes("requiere nota de ajuste")) return "La diferencia supera $10. Escribe una explicación de al menos cinco caracteres.";
   if (lower.includes("excede el saldo pendiente")) return "El abono es mayor que lo que falta por pagar.";
+  if (lower.includes("no se permite registrar un abono anterior")) return "Ese préstamo ya tiene un pago más reciente. Elige una fecha posterior para conservar el orden del cálculo.";
   if (lower.includes("saldo negativo") || lower.includes("saldos no pueden ser negativos")) return "Este movimiento dejaría el dinero disponible por debajo de cero.";
   if (lower.includes("el monto debe ser mayor") || lower.includes("maximo dos decimales") || lower.includes("máximo dos decimales")) return "Revisa que el monto sea mayor que cero y tenga máximo dos decimales.";
   if (lower.includes("asegurar_caja_automatica") || lower.includes("could not find the function") || lower.includes("function public.asegurar")) return "Falta activar la actualización de temporadas automáticas en Supabase. Aplica la migración del proyecto y vuelve a intentarlo.";
@@ -228,10 +240,26 @@ function firstName(user = state.user) {
   return first ? first[0].toLocaleUpperCase("es") + first.slice(1) : "";
 }
 
-function loanInterestBalance(loan) {
+function elapsedLoanPeriods(loan, asOf = todayMx()) {
+  const elapsedDays = Math.floor((Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${loan.fecha_desembolso}T00:00:00Z`)) / 86400000);
+  return Number.isFinite(elapsedDays) ? Math.floor(Math.max(0, elapsedDays) / 15) : 0;
+}
+
+function accrueDemoLoanInterest(loan, asOf) {
+  const newPeriods = Math.max(0, elapsedLoanPeriods(loan, asOf) - Number(loan.periodos_interes_calculados || 0));
+  if (!newPeriods) return;
+  const amount = Math.round(loanCapitalBalance(loan) * Number(loan.tasa_interes || 0.05) * newPeriods * 100) / 100;
+  if (amount > 0) loan.interes_total = Number(loan.interes_total || 0) + amount;
+  loan.periodos_interes_calculados = Number(loan.periodos_interes_calculados || 0) + newPeriods;
+}
+
+function loanInterestBalance(loan, asOf = todayMx()) {
   const paid = state.transactions.filter((tx) => tx.prestamo_id === loan.id && tx.tipo_movimiento === "abono_prestamo" && !tx.anulado)
     .reduce((sum, tx) => sum + Number(tx.interes_aplicado || 0), 0);
-  return Math.max(0, Number(loan.interes_total || 0) - paid);
+  const periodsElapsed = elapsedLoanPeriods(loan, asOf);
+  const periodsNotPosted = Math.max(0, periodsElapsed - Number(loan.periodos_interes_calculados || 0));
+  const unposted = Math.round(loanCapitalBalance(loan) * Number(loan.tasa_interes || 0.05) * periodsNotPosted * 100) / 100;
+  return Math.max(0, Number(loan.interes_total || 0) + unposted - paid);
 }
 
 async function cacheWrite(name, value) {
@@ -280,13 +308,10 @@ function renderLogin(message = "") {
           <p class="mt-2 text-sm leading-6 text-slate-500">Entra con tu correo y contraseña para ver la información de tu caja.</p>
           ${message ? `<div class="mt-5 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-800" role="alert">${h(message)}</div>` : ""}
           <form id="login-form" class="mt-6 space-y-4">
-            <label class="field-label">Correo electrónico<input class="field" name="email" type="email" autocomplete="username" required value="${h(state.user?.email || "")}" placeholder="tu@correo.com" /></label>
+            <label class="field-label">Correo electrónico<input class="field" name="email" type="text" inputmode="email" autocomplete="username" required value="${h(state.user?.email || "")}" placeholder="tu@correo.com" /></label>
             <label class="field-label">Contraseña<input class="field" name="password" type="password" autocomplete="current-password" required /></label>
             <button class="btn-primary w-full" type="submit">Entrar a Mi Caja</button>
           </form>
-          <div class="demo-divider"><span>o prueba sin datos reales</span></div>
-          <form id="demo-login-form" class="mt-4 space-y-3"><label class="field-label">Usuario de prueba<input class="field" name="demo_user" autocomplete="off" required value="admin" /></label><label class="field-label">Contraseña de prueba<input class="field" name="demo_password" type="password" autocomplete="off" required placeholder="Escribe root" /></label><button class="btn-secondary w-full" type="submit">Entrar al modo de prueba</button></form>
-          <p class="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">Demo local: usuario <strong>admin</strong>, contraseña <strong>root</strong>. Usa solo datos de ejemplo. No se conecta ni guarda en Supabase.</p>
           <p class="mt-5 text-center text-xs leading-5 text-slate-400">Solo las personas autorizadas pueden entrar. Tus datos se consultan con tu sesión personal.</p>
         </div>
       </section>
@@ -321,15 +346,15 @@ function seedDemoData() {
     { id: personIds.javier, owner_id: state.user.id, nombre: "Javier Cruz", tipo: "externo", estatus: "activo", limite_credito: 3000 }
   ];
   state.loans = [
-    { id: "demo-loan-erick", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.erick, capital_original: 2000, interes_total: 100, estado: "activo", fecha_desembolso: "2026-10-24", fecha_vencimiento: currentSaturday, metodo_pago: "efectivo" },
-    { id: "demo-loan-ana", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.ana, capital_original: 4000, interes_total: 200, estado: "activo", fecha_desembolso: "2026-10-10", fecha_vencimiento: olderSaturday, metodo_pago: "transferencia" },
-    { id: "demo-loan-javier", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.javier, capital_original: 1500, interes_total: 75, estado: "activo", fecha_desembolso: "2026-11-07", fecha_vencimiento: "2026-11-28", metodo_pago: "efectivo" }
+    { id: "demo-loan-erick", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.erick, capital_original: 2000, tasa_interes: 0.05, interes_total: 100, periodos_interes_calculados: 1, estado: "activo", fecha_desembolso: "2026-10-24", fecha_vencimiento: currentSaturday, metodo_pago: "efectivo" },
+    { id: "demo-loan-ana", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.ana, capital_original: 4000, tasa_interes: 0.05, interes_total: 400, periodos_interes_calculados: 2, estado: "activo", fecha_desembolso: "2026-10-10", fecha_vencimiento: olderSaturday, metodo_pago: "transferencia" },
+    { id: "demo-loan-javier", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.javier, capital_original: 1500, tasa_interes: 0.05, interes_total: 0, periodos_interes_calculados: 0, estado: "activo", fecha_desembolso: "2026-11-07", fecha_vencimiento: "2026-11-28", metodo_pago: "efectivo" }
   ];
   state.transactions = [
     { id: "demo-tx-erick-savings", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.erick, tipo_movimiento: "ahorro_semanal", monto: 350, fecha_operacion: fortnightSaturday, metodo_pago: "efectivo", anulado: false, creado_at: `${fortnightSaturday}T12:00:00Z` },
     { id: "demo-tx-erick-loan", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.erick, prestamo_id: "demo-loan-erick", tipo_movimiento: "abono_prestamo", monto: 600, capital_aplicado: 500, interes_aplicado: 100, fecha_operacion: previousSaturday, metodo_pago: "transferencia", anulado: false, creado_at: `${previousSaturday}T12:00:00Z` },
     { id: "demo-tx-ana-old", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.ana, tipo_movimiento: "ahorro_semanal", monto: 250, fecha_operacion: olderSaturday, metodo_pago: "efectivo", anulado: false, creado_at: `${olderSaturday}T12:00:00Z` },
-    { id: "demo-tx-ana-loan", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.ana, prestamo_id: "demo-loan-ana", tipo_movimiento: "abono_prestamo", monto: 100, capital_aplicado: 0, interes_aplicado: 100, fecha_operacion: previousSaturday, metodo_pago: "efectivo", anulado: false, creado_at: `${previousSaturday}T12:00:00Z` },
+    { id: "demo-tx-ana-loan", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.ana, prestamo_id: "demo-loan-ana", tipo_movimiento: "abono_prestamo", monto: 400, capital_aplicado: 0, interes_aplicado: 400, fecha_operacion: previousSaturday, metodo_pago: "efectivo", anulado: false, creado_at: `${previousSaturday}T12:00:00Z` },
     { id: "demo-tx-luisa", owner_id: state.user.id, ciclo_id: cycleId, participante_id: personIds.luisa, tipo_movimiento: "ahorro_semanal", monto: 500, fecha_operacion: currentSaturday, metodo_pago: "transferencia", anulado: false, creado_at: `${currentSaturday}T12:00:00Z` }
   ];
   state.arqueos = []; state.gains = [{ ciclo_id: cycleId, utilidad_neta: 375 }, { ciclo_id: previousCycleId, utilidad_neta: 280 }];
@@ -339,11 +364,7 @@ function seedDemoData() {
   toast("Modo de prueba activo. No se abrió ni modificó Supabase.", "success");
 }
 
-async function submitDemoLogin(form) {
-  const data = new FormData(form);
-  const username = String(data.get("demo_user") || "").trim().toLowerCase();
-  const password = String(data.get("demo_password") || "");
-  if (username !== "admin" || password !== "root") { renderLogin("El usuario o la contraseña de prueba no coinciden."); return; }
+async function submitDemoLogin() {
   enteringDemo = true;
   try {
     const { error } = await supabase.auth.signOut({ scope: "local" });
@@ -368,7 +389,8 @@ function recordDemoCollection(items, person) {
       state.liquidity.liquidez_total = Number(state.liquidity.liquidez_total) + Number(payload.p_monto);
     } else {
       const loan = state.loans.find((row) => row.id === payload.p_prestamo_id);
-      const interestPaid = Math.min(Number(payload.p_monto), loan ? loanInterestBalance(loan) : 0);
+      if (loan) accrueDemoLoanInterest(loan, payload.p_fecha_operacion);
+      const interestPaid = Math.min(Number(payload.p_monto), loan ? loanInterestBalance(loan, payload.p_fecha_operacion) : 0);
       const capitalPaid = Math.max(0, Number(payload.p_monto) - interestPaid);
       state.transactions.push({ id: item.id, ciclo_id: payload.p_ciclo_id, participante_id: person.id, prestamo_id: payload.p_prestamo_id, tipo_movimiento: "abono_prestamo", monto: payload.p_monto, capital_aplicado: capitalPaid, interes_aplicado: interestPaid, fecha_operacion: payload.p_fecha_operacion, metodo_pago: payload.p_metodo_pago, anulado: false, creado_at: item.created_at });
       state.liquidity.liquidez_total = Number(state.liquidity.liquidez_total) + Number(payload.p_monto);
@@ -383,8 +405,7 @@ function recordDemoCollection(items, person) {
 
 function recordDemoLoan(payload, person) {
   if (state.loans.some((row) => row.id === payload.p_id)) return;
-  const interest = Math.round(Number(payload.p_capital) * 0.05 * 100) / 100;
-  state.loans.unshift({ id: payload.p_id, owner_id: state.user.id, ciclo_id: payload.p_ciclo_id, participante_id: person.id, capital_original: payload.p_capital, interes_total: interest, estado: "activo", fecha_desembolso: payload.p_fecha_desembolso, fecha_vencimiento: selectedCycle().fecha_fin, metodo_pago: payload.p_metodo_pago });
+  state.loans.unshift({ id: payload.p_id, owner_id: state.user.id, ciclo_id: payload.p_ciclo_id, participante_id: person.id, capital_original: payload.p_capital, tasa_interes: 0.05, interes_total: 0, periodos_interes_calculados: 0, estado: "activo", fecha_desembolso: payload.p_fecha_desembolso, fecha_vencimiento: selectedCycle().fecha_fin, metodo_pago: payload.p_metodo_pago });
   state.transactions.unshift({ id: `demo-loan-tx-${payload.p_id}`, owner_id: state.user.id, ciclo_id: payload.p_ciclo_id, participante_id: person.id, tipo_movimiento: "desembolso_prestamo", monto: payload.p_capital, fecha_operacion: payload.p_fecha_desembolso, metodo_pago: payload.p_metodo_pago, anulado: false, creado_at: new Date().toISOString() });
   state.liquidity.liquidez_total = Math.max(0, Number(state.liquidity.liquidez_total) - Number(payload.p_capital));
   toast("Préstamo creado solo en los datos de prueba. Supabase no recibió cambios.", "success");
@@ -477,16 +498,18 @@ function missedWeek(personId, saturday) { return Boolean(state.missedWeeks[`${pe
 function cycleName(cycle) { return cycle?.nombre || "Sin caja"; }
 function participantName(id) { return state.people.find((person) => person.id === id)?.nombre || "Sin persona"; }
 function activePeople() { return state.people.filter((person) => person.estatus !== "inactivo"); }
-function loanBalance(loan) {
-  const payments = state.transactions.filter((transaction) => transaction.prestamo_id === loan.id && transaction.tipo_movimiento === "abono_prestamo" && !transaction.anulado);
-  const paidCapital = payments.reduce((total, payment) => total + Number(payment.capital_aplicado || 0), 0);
-  const paidInterest = payments.reduce((total, payment) => total + Number(payment.interes_aplicado || 0), 0);
-  return Math.max(0, Number(loan.capital_original || 0) + Number(loan.interes_total || 0) - paidCapital - paidInterest);
+function loanBalance(loan, asOf = todayMx()) {
+  return Math.max(0, loanCapitalBalance(loan) + loanInterestBalance(loan, asOf));
 }
 
 function loanCapitalBalance(loan) {
   const paidCapital = state.transactions.filter((transaction) => transaction.prestamo_id === loan.id && transaction.tipo_movimiento === "abono_prestamo" && !transaction.anulado).reduce((total, payment) => total + Number(payment.capital_aplicado || 0), 0);
   return Math.max(0, Number(loan.capital_original || 0) - paidCapital);
+}
+
+function lastLoanPaymentDate(loan) {
+  return state.transactions.filter((tx) => tx.prestamo_id === loan.id && tx.tipo_movimiento === "abono_prestamo" && !tx.anulado)
+    .reduce((latest, tx) => String(tx.fecha_operacion) > latest ? String(tx.fecha_operacion) : latest, "");
 }
 
 function nextSaturday(value = todayMx()) {
@@ -529,16 +552,24 @@ function contactCalendar(person, cycle) {
   if (!person || !cycle) return "";
   const latest = todayMx() < cycle.fecha_fin ? todayMx() : cycle.fecha_fin;
   const weeks = [];
-  for (let saturday = cycle.fecha_inicio; saturday <= latest; saturday = addDays(saturday, 7)) {
-    if (!isSaturday(saturday)) continue;
+  let saturday = isSaturday(cycle.fecha_inicio) ? cycle.fecha_inicio : nextSaturday(cycle.fecha_inicio);
+  for (; saturday <= latest; saturday = addDays(saturday, 7)) {
     const start = saturday === cycle.fecha_inicio ? cycle.fecha_inicio : addDays(saturday, -6);
     const contributions = state.transactions.filter((tx) => tx.ciclo_id === cycle.id && tx.participante_id === person.id && tx.tipo_movimiento === "ahorro_semanal" && !tx.anulado && tx.fecha_operacion >= start && tx.fecha_operacion <= saturday);
+    const loanPayments = state.transactions.filter((tx) => tx.ciclo_id === cycle.id && tx.participante_id === person.id && tx.tipo_movimiento === "abono_prestamo" && !tx.anulado && tx.fecha_operacion >= start && tx.fecha_operacion <= saturday);
     const amount = contributions.reduce((sum, tx) => sum + Number(tx.monto || 0), 0);
+    const loanAmount = loanPayments.reduce((sum, tx) => sum + Number(tx.monto || 0), 0);
     const marked = missedWeek(person.id, saturday);
-    const status = amount > 0 ? `<span class="calendar-paid">Aportó ${money(amount)}</span>` : marked ? `<span class="calendar-missed">✕ No dio</span>` : `<span class="calendar-empty">Sin registro</span>`;
-    weeks.push(`<article class="calendar-week"><div><strong>${dateText(saturday)}</strong><p class="mt-1 text-xs text-slate-500">${dateText(start)} – ${dateText(saturday)}</p>${status}</div>${amount > 0 ? "" : `<button class="btn-quiet ${marked ? "text-rose-700" : ""}" data-action="toggle-missed-week" data-person="${h(person.id)}" data-saturday="${saturday}" aria-label="${marked ? "Quitar marca No dio" : "Marcar No dio"}">${marked ? "Quitar marca" : "Marcar No dio"}</button>`}</article>`);
+    const classes = [amount > 0 ? "week-savings" : "", loanAmount > 0 ? "week-loan" : "", marked && amount <= 0 ? "week-missed" : ""].filter(Boolean).join(" ");
+    weeks.push(`<button class="mini-week ${classes}" data-action="calendar-week" data-cycle="${h(cycle.id)}" data-saturday="${saturday}" title="${dateText(saturday)} · Caja ${money(amount)} · Préstamos ${money(loanAmount)}"><span>${new Date(`${saturday}T12:00:00Z`).getUTCDate()}</span></button>`);
   }
-  return `<section class="calendar-panel mt-4"><div class="flex items-start justify-between gap-3"><div><h4 class="font-extrabold">Calendario de aportaciones</h4><p class="mt-1 text-sm text-slate-500">Marca “No dio” solo como recordatorio visual. No impide registrar después.</p></div><button class="btn-quiet" data-action="close-calendar">Cerrar</button></div><div class="mt-3 space-y-2">${weeks.reverse().join("") || `<p class="text-sm text-slate-500">Todavía no hay semanas para mostrar.</p>`}</div></section>`;
+  const groups = new Map();
+  for (let index = 0; index < weeks.length; index += 1) {
+    const saturdayDate = isSaturday(cycle.fecha_inicio) ? addDays(cycle.fecha_inicio, index * 7) : addDays(nextSaturday(cycle.fecha_inicio), index * 7);
+    const key = saturdayDate.slice(0, 7);
+    groups.set(key, [...(groups.get(key) || []), weeks[index]]);
+  }
+  return `<section class="calendar-panel mt-4"><div class="flex items-start justify-between gap-3"><div><h4 class="font-extrabold">Calendario de aportaciones</h4><p class="mt-1 text-sm text-slate-500">Verde: ahorro · dorado: pago de préstamo. Toca una semana para ver el detalle.</p></div><button class="btn-quiet" data-action="close-calendar">Cerrar</button></div><div class="month-heatmap mt-3">${[...groups.entries()].reverse().map(([month, cells]) => `<section class="month-card"><h5>${new Intl.DateTimeFormat("es-MX", { month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`))}</h5><div class="mini-week-grid">${cells.join("")}</div></section>`).join("") || `<p class="text-sm text-slate-500">Todavía no hay semanas para mostrar.</p>`}</div></section>`;
 }
 
 function alertCount() { return collectablePeople().length + blockedQueueCount(); }
@@ -625,14 +656,15 @@ function renderShell() {
         <div class="flex min-w-0 items-center gap-3"><button class="icon-button" data-action="toggle-menu" aria-label="Abrir perfil e historial">${icon("menu", 21)}</button><div class="min-w-0"><p class="truncate text-base font-extrabold leading-5 text-forest-900">Hola, ${greetingName}, bienvenido,</p><p class="text-sm leading-5 text-slate-600">¿qué quieres hacer hoy?</p><p class="truncate text-[11px] font-semibold text-forest-700">${h(selectedCycle()?.nombre || "La primera temporada se abrirá sola")}</p></div></div>
         <div class="flex shrink-0 items-center gap-2">
           ${pending && isOnline() ? `<button data-action="sync" class="icon-button hidden sm:inline-flex" aria-label="Enviar movimientos pendientes" ${state.syncing ? "disabled" : ""}>${icon("refresh", 18)}</button>` : ""}
-          <button data-action="navigate" data-view="alertas" class="icon-button alert-button ${state.view === "alertas" ? "active" : ""}" aria-label="Pendientes${alerts ? `, ${alerts}` : ""}">${icon("bell", 21)}${alerts ? `<span class="alert-count">${alerts > 99 ? "99+" : alerts}</span>` : ""}</button>
+          ${state.view === "personas" ? `<button data-action="toggle-person-form" class="btn-primary header-add">${icon("plus", 17)} Agregar</button>` : `<button data-action="navigate" data-view="alertas" class="icon-button alert-button ${state.view === "alertas" ? "active" : ""}" aria-label="Pendientes${alerts ? `, ${alerts}` : ""}">${icon("bell", 21)}${alerts ? `<span class="alert-count">${alerts > 99 ? "99+" : alerts}</span>` : ""}</button>`}
         </div>
       </div>
     </header>`;
   const drawer = state.menuOpen ? `<div class="drawer-backdrop" data-drawer-backdrop><aside class="drawer-panel safe-top safe-bottom" data-drawer="true">
     <div class="flex items-center justify-between"><div><p class="text-xs font-bold uppercase tracking-wide text-forest-700">Mi Caja</p><h2 class="text-xl font-extrabold">Tu cuenta</h2></div><button class="icon-button" data-action="close-menu" aria-label="Cerrar menú">${icon("close", 19)}</button></div>
     <div class="profile-user-card mt-4"><span class="profile-avatar">${h((firstName() || "M").slice(0, 1))}</span><span class="min-w-0"><strong class="block text-lg">${h(firstName() || "Cuenta activa")}</strong><span class="block break-all text-sm text-white/75">${h(state.user.email || "Cuenta activa")}</span></span></div>
-    <button class="menu-link mt-5 w-full" data-action="navigate" data-view="temporadas"><span>${icon("calendar", 19)}<span>Historial de cajas</span></span><span class="badge badge-green">${state.cycles.length}</span></button>
+    <button class="menu-link mt-5 w-full" data-action="navigate" data-view="calendario"><span>${icon("calendar", 19)}<span>Calendario de la caja</span></span>${icon("arrow", 17)}</button>
+    <button class="menu-link mt-3 w-full" data-action="navigate" data-view="temporadas"><span>${icon("calendar", 19)}<span>Historial de cajas</span></span><span class="badge badge-green">${state.cycles.length}</span></button>
     ${renderYearHistory()}
     ${selectedCycle()?.activo && selectedCycle().fecha_fin <= todayMx() ? `<button class="btn-secondary mt-3 w-full" data-action="navigate" data-view="temporadas">Entregar temporada</button>` : ""}
     <section class="profile-section mt-5">${state.isDemo ? `<div class="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">El cambio de contraseña no está disponible en datos de prueba.</div>` : `<h3 class="font-extrabold">Cambiar contraseña</h3><form id="profile-password-form" class="mt-3 space-y-3"><label class="field-label">Contraseña actual<input class="field" name="current" type="password" autocomplete="current-password" required /></label><label class="field-label">Nueva contraseña<input class="field" name="password" type="password" autocomplete="new-password" minlength="10" required /></label><label class="field-label">Repite la nueva contraseña<input class="field" name="confirm" type="password" autocomplete="new-password" minlength="10" required /></label><button class="btn-secondary w-full" type="submit">Guardar contraseña</button></form>`}<button data-action="logout" class="btn-quiet mt-3 w-full text-rose-700">${icon("logout", 17)} ${state.isDemo ? "Salir del modo de prueba" : "Cerrar sesión"}</button></section>
@@ -640,7 +672,7 @@ function renderShell() {
   const page = `
     <div class="mx-auto min-h-[calc(100vh-66px)] max-w-4xl">
       <main class="min-w-0 px-4 pb-28 pt-4 sm:px-6 sm:pt-6">
-        ${state.view !== "inicio" ? `<div class="mb-4 flex items-center justify-between gap-3"><h1 class="text-xl font-extrabold text-forest-900 sm:text-2xl">${viewNames[state.view]}</h1>${!isOnline() ? `<span class="badge badge-amber">Sin conexión</span>` : ""}</div>` : ""}
+        ${state.view !== "inicio" ? `<div class="mb-4 flex items-center justify-between gap-3"><h1 class="text-xl font-extrabold text-forest-900 sm:text-2xl">${viewNames[state.view]}</h1>${state.view !== "personas" && !isOnline() ? `<span class="badge badge-amber">Sin conexión</span>` : ""}</div>` : ""}
         ${!isOnline() && state.view !== "inicio" ? `<div class="info-banner mb-4">Sin internet. Los movimientos se guardan en este teléfono y se enviarán cuando vuelva la conexión.</div>` : ""}
         ${state.isDemo ? `<div class="demo-ribbon" role="status">MODO SIMULACIÓN · Datos de prueba <button class="btn-quiet" data-action="reset-demo">Reiniciar datos</button></div>` : pending && state.view !== "inicio" ? `<div class="info-banner mb-4 flex flex-wrap items-center justify-between gap-2"><p><strong>${pending} movimiento${pending === 1 ? "" : "s"}</strong> guardado${pending === 1 ? "" : "s"} en este teléfono.${blockedQueueCount() ? ` ${blockedQueueCount()} necesita${blockedQueueCount() === 1 ? "" : "n"} revisión.` : ""}</p><button data-action="sync" class="btn-secondary px-3 py-2" ${!isOnline() || state.syncing ? "disabled" : ""}>${icon("refresh", 16)} Enviar</button></div>` : ""}
         <section id="view-content">${renderView()}</section>
@@ -696,7 +728,7 @@ function renderDashboard() {
     </section>
     <div class="finance-grid mt-4">
       <article class="finance-card"><p>Dinero total general</p><strong>${money(generalTotal)}</strong><span>Lo que hay en la caja más lo que está prestado.</span></article>
-      <article class="finance-card loan-finance-card"><p>En préstamo</p><strong>${money(loaned)}</strong><span>${loanPercent.toFixed(0)}% del total · ${liveLoans.length} préstamo${liveLoans.length === 1 ? "" : "s"}</span><details class="interest-details"><summary>Ver detalle de réditos</summary><p class="interest-total">${money(interestLeft)} por cobrar</p><span>Interés fijo del 5% de los préstamos activos.</span>${interestRows || `<p class="mt-2 text-sm text-slate-500">No hay réditos por cobrar.</p>`}</details></article>
+      <article class="finance-card loan-finance-card"><p>En préstamo</p><strong>${money(loaned)}</strong><span>${loanPercent.toFixed(0)}% del total · ${liveLoans.length} préstamo${liveLoans.length === 1 ? "" : "s"}</span><details class="interest-details"><summary>Ver detalle de réditos</summary><p class="interest-total">${money(interestLeft)} por cobrar</p><span>Rédito simple: 5% cada 15 días completos sobre el capital pendiente; los pagos a capital reducen los periodos siguientes.</span>${interestRows || `<p class="mt-2 text-sm text-slate-500">No hay réditos por cobrar.</p>`}</details></article>
       <article class="finance-card"><p>Ganancias</p><strong class="finance-green">${money(gainsValue)}</strong><span>Intereses y multas, menos gastos.</span></article>
       <article class="finance-card estimate-card"><p>Estimado</p><strong>${money(estimate)}</strong><span>Ganancias actuales más ${money(interestLeft)} de réditos por cobrar al 5%.</span></article>
     </div>
@@ -764,6 +796,63 @@ function renderStatement(cycle) {
   return `<div class="space-y-5"><section class="card"><div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="text-lg font-extrabold">Estado de cuenta</h2><p class="mt-1 text-sm text-slate-500">${state.statementPersonId ? `Movimientos de ${h(participantName(state.statementPersonId))}.` : "Movimientos más recientes primero."}</p></div><div class="flex flex-wrap gap-2">${state.statementPersonId ? '<button class="btn-secondary" data-action="clear-person-statement">Ver todos</button>' : ""}${state.isDemo ? "" : '<button class="btn-primary" data-action="new-movement">Anotar movimiento</button>'}</div></div><div class="mt-4 grid gap-3 sm:grid-cols-3"><div class="rounded-xl bg-teal-50 p-3"><p class="text-sm text-slate-600">Ahorros recibidos</p><p class="mt-1 text-lg font-extrabold">${money(savings)}</p></div><div class="rounded-xl bg-blue-50 p-3"><p class="text-sm text-slate-600">Préstamos entregados</p><p class="mt-1 text-lg font-extrabold">${money(loansGiven)}</p></div><div class="rounded-xl bg-slate-50 p-3"><p class="text-sm text-slate-600">Abonos cobrados</p><p class="mt-1 text-lg font-extrabold">${money(payments)}</p></div></div><div class="mt-4 flex flex-wrap items-end gap-3"><label class="field-label min-w-[180px]">Consultar por mes<select id="statement-month" class="field"><option value="">Todos los meses</option>${months.map((value) => `<option value="${value}" ${value === month ? "selected" : ""}>${new Intl.DateTimeFormat("es-MX", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}-01T12:00:00Z`))}</option>`).join("")}</select></label><p class="pb-3 text-sm text-slate-500">${month ? `Total registrado: <strong class="text-ink">${money(rows.reduce((sum, tx) => sum + Number(tx.monto || 0), 0))}</strong>` : `${rows.length} movimiento${rows.length === 1 ? "" : "s"}`}</p></div></section><section class="card">${renderTransactionsTable(rows, true)}</section>${state.pending.length ? `<section class="card"><div class="flex items-center justify-between gap-3"><div><h2 class="font-extrabold">Pendientes guardados</h2><p class="mt-1 text-sm text-slate-500">Si uno se rechaza, los demás se sincronizan por separado.</p></div><button class="btn-secondary" data-action="sync" ${!isOnline() || state.syncing ? "disabled" : ""}>Sincronizar</button></div><div class="mt-4 space-y-3">${state.pending.map(renderQueueEntry).join("")}</div></section>` : ""}<section class="card"><h3 class="font-extrabold">Historial de temporadas</h3><p class="mt-2 text-sm text-slate-600">Consulta las cajas anteriores desde tu menú.</p><button class="btn-secondary mt-3" data-action="navigate" data-view="temporadas">Ver historial de cajas</button></section></div>`;
 }
 
+function calendarWeeks(cycle) {
+  if (!cycle) return [];
+  const latest = todayMx() < cycle.fecha_fin ? todayMx() : cycle.fecha_fin;
+  const firstSaturday = isSaturday(cycle.fecha_inicio) ? cycle.fecha_inicio : nextSaturday(cycle.fecha_inicio);
+  const weeks = [];
+  for (let saturday = firstSaturday, index = 1; saturday <= latest; saturday = addDays(saturday, 7), index += 1) {
+    const start = saturday === cycle.fecha_inicio ? cycle.fecha_inicio : addDays(saturday, -6);
+    const rows = state.transactions.filter((tx) => tx.ciclo_id === cycle.id && !tx.anulado && tx.fecha_operacion >= start && tx.fecha_operacion <= saturday);
+    const savings = rows.filter((tx) => tx.tipo_movimiento === "ahorro_semanal");
+    const loanPayments = rows.filter((tx) => tx.tipo_movimiento === "abono_prestamo");
+    weeks.push({
+      cycle, index, saturday, start, rows,
+      savingsTotal: savings.reduce((sum, tx) => sum + Number(tx.monto || 0), 0),
+      loanTotal: loanPayments.reduce((sum, tx) => sum + Number(tx.monto || 0), 0),
+      interestTotal: loanPayments.reduce((sum, tx) => sum + Number(tx.interes_aplicado || 0), 0)
+    });
+  }
+  return weeks;
+}
+
+function renderCalendarWeekDetail(week) {
+  if (!week) return `<section class="empty-season"><h2>Elige una semana</h2><p>Toca un bloque del calendario para ver quién aportó y cuánto entró.</p></section>`;
+  const grouped = new Map();
+  for (const tx of week.rows) {
+    if (!tx.participante_id) continue;
+    const row = grouped.get(tx.participante_id) || { name: participantName(tx.participante_id), total: 0, savings: 0, loan: 0 };
+    row.total += Number(tx.monto || 0);
+    if (tx.tipo_movimiento === "ahorro_semanal") row.savings += Number(tx.monto || 0);
+    if (tx.tipo_movimiento === "abono_prestamo") row.loan += Number(tx.monto || 0);
+    grouped.set(tx.participante_id, row);
+  }
+  const rows = [...grouped.entries()].sort((a, b) => a[1].name.localeCompare(b[1].name, "es"));
+  const registerButtons = rows.filter(([id]) => state.people.some((person) => person.id === id)).map(([id, row]) => {
+    const person = state.people.find((item) => item.id === id);
+    return `<div class="movement-row"><div class="min-w-0"><p class="truncate font-bold">${h(row.name)}</p><p class="mt-1 text-xs text-slate-500">Caja ${money(row.savings)} · Préstamo ${money(row.loan)}</p></div><div class="flex shrink-0 items-center gap-2"><strong>${money(row.total)}</strong>${week.cycle.activo ? `<button class="btn-quiet" data-action="calendar-collect" data-person="${h(person.id)}" data-saturday="${week.saturday}">Anotar</button>` : ""}</div></div>`;
+  }).join("");
+  const canRegister = week.cycle.activo && week.saturday <= todayMx();
+  const totalIn = week.savingsTotal + week.loanTotal;
+  return `<section class="card"><div class="flex flex-wrap items-start justify-between gap-3"><div><p class="eyebrow">Semana #${week.index}</p><h2 class="mt-1 text-lg font-extrabold">${dateText(week.start)} – ${dateText(week.saturday)}</h2><p class="mt-1 text-sm text-slate-500">${h(cycleName(week.cycle))}</p></div>${canRegister ? `<button class="btn-primary" data-action="calendar-collect" data-saturday="${week.saturday}">${icon("plus", 17)} Registrar pago</button>` : `<span class="badge badge-gray">Solo consulta</span>`}</div><div class="calendar-totals mt-4"><div><span>Entró por ahorro</span><strong>${money(week.savingsTotal)}</strong></div><div><span>Entró por préstamos</span><strong>${money(week.loanTotal)}</strong></div><div><span>Réditos cobrados</span><strong>${money(week.interestTotal)}</strong></div><div><span>Total recibido</span><strong>${money(totalIn)}</strong></div></div>${canRegister ? `<div class="calendar-quick-register mt-4"><label class="field-label">Registrar pago de<select class="field" id="calendar-quick-person"><option value="">Elige a una persona</option>${participantOptions("all", "", true)}</select></label><button class="btn-secondary mt-2 w-full" data-action="calendar-collect" data-saturday="${week.saturday}">Abrir registro para este sábado</button></div>` : ""}<h3 class="mt-5 font-extrabold">Personas que pagaron</h3><div class="mt-3 space-y-2">${registerButtons || emptyState("Todavía no hay pagos en esta semana.")}</div><p class="mt-3 text-xs text-slate-500">El total recibido suma ahorros y abonos anotados. Toca “Anotar” para registrar otro pago con la fecha de este sábado.</p></section>`;
+}
+
+function renderGlobalCalendar() {
+  const cycle = state.cycles.find((item) => item.id === state.calendarCycleId) || selectedCycle() || state.cycles[0] || null;
+  if (!cycle) return `<section class="empty-season"><h2>Aún no hay cajas</h2><p>El calendario aparecerá cuando la caja se abra con el primer movimiento.</p></section>`;
+  const weeks = calendarWeeks(cycle);
+  const months = [...new Set(weeks.map((week) => week.saturday.slice(0, 7)))].sort();
+  const visibleWeeks = weeks.filter((week) => !state.calendarMonth || week.saturday.startsWith(state.calendarMonth));
+  const groups = new Map();
+  for (const week of visibleWeeks) groups.set(week.saturday.slice(0, 7), [...(groups.get(week.saturday.slice(0, 7)) || []), week]);
+  let selected = weeks.find((week) => week.saturday === state.calendarWeek) || null;
+  const jumpNumber = Number(String(window.location.hash.match(/#S(\d+)/i)?.[1] || ""));
+  if (!selected && jumpNumber > 0) selected = weeks.find((week) => week.index === jumpNumber) || null;
+  if (!selected && state.calendarWeek) selected = weeks.find((week) => week.index === Number(String(state.calendarWeek).replace(/\D/g, ""))) || null;
+  const cycleChoices = [...state.cycles].sort((a, b) => String(b.fecha_inicio).localeCompare(String(a.fecha_inicio)));
+  return `<div class="space-y-4"><section class="card"><div class="flex flex-wrap items-end justify-between gap-3"><div><p class="eyebrow">Ahorros y pagos por semana</p><h2 class="mt-1 text-xl font-extrabold">Calendario de la caja</h2><p class="mt-1 text-sm text-slate-500">El bloque corresponde al sábado que cierra cada semana.</p></div><form id="calendar-jump-form" class="calendar-jump"><label class="field-label">Ir a semana<input class="field" name="week" inputmode="numeric" placeholder="#S12" aria-label="Número de semana, por ejemplo S12" /></label><button class="btn-secondary mt-1" type="submit">Ir</button></form></div><div class="mt-4 grid gap-3 sm:grid-cols-2"><label class="field-label">Caja<select id="calendar-cycle" class="field">${cycleChoices.map((item) => `<option value="${h(item.id)}" ${item.id === cycle.id ? "selected" : ""}>${h(item.nombre || cycleName(item))}</option>`).join("")}</select></label><label class="field-label">Filtrar por mes<select id="calendar-month" class="field"><option value="">Todos los meses</option>${months.map((month) => `<option value="${month}" ${state.calendarMonth === month ? "selected" : ""}>${new Intl.DateTimeFormat("es-MX", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`))}</option>`).join("")}</select></label></div><div class="calendar-legend mt-4"><span><i class="legend-dot legend-mint"></i>Ahorro recibido</span><span><i class="legend-dot legend-gold"></i>Abono de préstamo</span><span><i class="legend-dot legend-empty"></i>Sin movimientos</span></div><div class="month-heatmap mt-4">${[...groups.entries()].reverse().map(([month, items]) => `<section class="month-card"><h3>${new Intl.DateTimeFormat("es-MX", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`))}</h3><div class="week-heatmap">${items.map((week) => `<button class="week-cell ${week.savingsTotal > 0 ? "week-savings" : ""} ${week.loanTotal > 0 ? "week-loan" : ""} ${selected?.saturday === week.saturday ? "week-selected" : ""}" data-action="calendar-week" data-cycle="${h(cycle.id)}" data-saturday="${week.saturday}" aria-label="Semana ${week.index}, sábado ${dateText(week.saturday)}, ahorro ${money(week.savingsTotal)}, préstamos ${money(week.loanTotal)}"><span>#S${week.index}</span><small>${new Date(`${week.saturday}T12:00:00Z`).getUTCDate()}</small></button>`).join("")}</div></section>`).join("") || emptyState("No hay semanas para mostrar en esta temporada.")}</div></section>${renderCalendarWeekDetail(selected)}</div>`;
+}
+
 function renderTransactionsTable(rows, allowCancel = false) {
   if (!rows.length) return emptyState("No hay movimientos en esta caja.");
   const sorted = [...rows].sort((a, b) => String(b.fecha_operacion).localeCompare(String(a.fecha_operacion)) || String(b.creado_at).localeCompare(String(a.creado_at)));
@@ -794,6 +883,20 @@ function whatsappLink(person) {
   window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
 }
 
+function renderContactHistory(transactions, person) {
+  const groups = new Map();
+  for (const tx of transactions) {
+    const month = String(tx.fecha_operacion || "").slice(0, 7) || "sin-fecha";
+    groups.set(month, [...(groups.get(month) || []), tx]);
+  }
+  const ordered = [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  if (!ordered.length) return `<p class="mt-3 text-sm text-slate-500">${h(person.nombre)} todavía no tiene movimientos.</p>`;
+  return `<div class="contact-month-history mt-3">${ordered.map(([month, rows], index) => {
+    const monthLabel = month === "sin-fecha" ? "Sin fecha" : new Intl.DateTimeFormat("es-MX", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T12:00:00Z`));
+    return `<details class="contact-history-month" ${index === 0 ? "open" : ""}><summary><span>${h(monthLabel)}</span><span>${rows.length} movimiento${rows.length === 1 ? "" : "s"}</span></summary><div class="mt-2 space-y-2">${rows.map((tx) => `<div class="movement-row"><div><p class="font-semibold">${h(movementLabels[tx.tipo_movimiento] || tx.tipo_movimiento)}${tx.anulado ? " · Anulado" : ""}</p><p class="mt-1 text-sm text-slate-500">${dateText(tx.fecha_operacion)} · ${h(paymentLabels[tx.metodo_pago] || tx.metodo_pago)}</p></div><strong>${money(tx.monto)}</strong></div>`).join("")}</div></details>`;
+  }).join("")}</div>`;
+}
+
 function renderPeople() {
   const cycleId = selectedCycle()?.id;
   const query = state.personSearch.toLocaleLowerCase("es").trim();
@@ -810,10 +913,10 @@ function renderPeople() {
     const dueBadge = due.type ? `<span class="badge ${due.type === "Caja y réditos" ? "badge-both" : due.type === "Caja de ahorro" ? "badge-green" : "badge-amber"}">${due.type}</span>` : "";
     const frequencyControl = person.tipo === "socio" ? `<label class="field-label mt-4">Frecuencia de recordatorio<select id="contact-frequency" class="field" data-person="${h(person.id)}"><option value="weekly" ${contactFrequency(person) === "weekly" ? "selected" : ""}>Cada semana</option><option value="fortnightly" ${contactFrequency(person) === "fortnightly" ? "selected" : ""}>Cada 15 días</option><option value="flexible" ${contactFrequency(person) === "flexible" ? "selected" : ""}>Flexible, sin aviso automático</option></select></label>` : "";
     const calendar = state.calendarPersonId === person.id ? contactCalendar(person, selectedCycle()) : "";
-    return `<article class="contact-card ${person.tipo === "externo" ? "external" : ""} ${selected ? "expanded" : ""}"><button class="contact-heading" data-action="toggle-person" data-id="${h(person.id)}" aria-expanded="${selected}"><span class="min-w-0"><strong class="block truncate text-base">${h(person.nombre)}</strong><span class="mt-2 flex flex-wrap items-center gap-2">${person.tipo === "externo" ? '<span class="badge badge-amber">No participa en caja</span>' : '<span class="badge badge-green">Socio</span>'}${dueBadge}</span><span class="mt-2 block truncate text-sm text-slate-500">${h(phone || "Sin teléfono")}</span></span><span class="shrink-0 text-right">${balance > 0.01 ? `<strong class="block text-lg">${money(balance)}</strong><span class="text-sm text-slate-500">por cobrar</span>` : `<span class="badge badge-gray">Al corriente</span>`}</span></button>${selected ? `<div class="contact-details"><div class="flex flex-wrap gap-2">${person.tipo === "socio" || loans.length ? `<button class="btn-primary" data-action="collect-person" data-person="${h(person.id)}">${person.tipo === "socio" ? "Registrar ingreso o pago" : "Registrar pago"}</button>` : `<button class="btn-primary" data-action="loan-person" data-person="${h(person.id)}">Prestar dinero</button>`}<button class="btn-secondary" data-action="whatsapp" data-person="${h(person.id)}">${icon("message",16)} WhatsApp</button>${person.tipo === "socio" ? `<button class="btn-secondary" data-action="toggle-calendar" data-person="${h(person.id)}">${icon("calendar", 16)} ${state.calendarPersonId === person.id ? "Ocultar calendario" : "Ver calendario"}</button>` : ""}</div>${frequencyControl}<h3 class="mt-5 font-extrabold">Movimientos de ${h(person.nombre)}</h3><p class="mt-1 text-xs text-slate-500">Del más reciente al más antiguo.</p>${transactions.length ? `<div class="mt-3 space-y-2">${transactions.map((tx) => `<div class="movement-row"><div><p class="font-semibold">${h(movementLabels[tx.tipo_movimiento] || tx.tipo_movimiento)}${tx.anulado ? ' · Anulado' : ''}</p><p class="mt-1 text-sm text-slate-500">${dateText(tx.fecha_operacion)} · ${h(paymentLabels[tx.metodo_pago] || tx.metodo_pago)}</p></div><strong>${money(tx.monto)}</strong></div>`).join("")}</div>` : `<p class="mt-3 text-sm text-slate-500">Todavía no tiene movimientos.</p>`}${calendar}</div>` : ""}</article>`;
+    return `<article class="contact-card ${person.tipo === "externo" ? "external" : ""} ${selected ? "expanded" : ""}"><button class="contact-heading" data-action="toggle-person" data-id="${h(person.id)}" aria-expanded="${selected}"><span class="min-w-0"><strong class="block truncate text-base">${h(person.nombre)}</strong><span class="mt-2 flex flex-wrap items-center gap-2">${person.tipo === "externo" ? '<span class="badge badge-amber">No participa en caja</span>' : '<span class="badge badge-green">Socio</span>'}${dueBadge}</span><span class="mt-2 block truncate text-sm text-slate-500">${h(phone || "Sin teléfono")}</span></span><span class="shrink-0 text-right">${balance > 0.01 ? `<strong class="block text-lg">${money(balance)}</strong><span class="text-sm text-slate-500">por cobrar</span>` : `<span class="badge badge-gray">Al corriente</span>`}</span></button>${selected ? `<div class="contact-details"><div class="flex flex-wrap gap-2">${person.tipo === "socio" || loans.length ? `<button class="btn-primary" data-action="collect-person" data-person="${h(person.id)}">${person.tipo === "socio" ? "Registrar ingreso o pago" : "Registrar pago"}</button>` : `<button class="btn-primary" data-action="loan-person" data-person="${h(person.id)}">Prestar dinero</button>`}<button class="btn-secondary" data-action="whatsapp" data-person="${h(person.id)}">${icon("message",16)} WhatsApp</button>${person.tipo === "socio" ? `<button class="btn-secondary" data-action="toggle-calendar" data-person="${h(person.id)}">${icon("calendar", 16)} ${state.calendarPersonId === person.id ? "Ocultar calendario" : "Ver calendario"}</button>` : ""}</div>${frequencyControl}<h3 class="mt-5 font-extrabold">Movimientos de ${h(person.nombre)}</h3><p class="mt-1 text-xs text-slate-500">Agrupados por mes, del más reciente al más antiguo.</p>${renderContactHistory(transactions, person)}${calendar}</div>` : ""}</article>`;
   }).join("");
   const withMovementsCount = state.people.filter((person) => state.transactions.some((tx) => tx.participante_id === person.id)).length;
-  return `<div class="space-y-4"><section class="card"><div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-lg font-extrabold">Tus contactos</h2><p class="mt-1 text-sm text-slate-600">Toca un nombre para ver sus datos y movimientos recientes.</p></div><button class="btn-primary" data-action="toggle-person-form">${icon("plus", 18)} Agregar</button></div>${state.showPersonForm ? `<form id="person-form" class="person-form mt-5"><label class="field-label">Nombre completo<input class="field" name="name" maxlength="200" required placeholder="Nombre de la persona" /></label><label class="field-label">Teléfono de WhatsApp<input class="field" name="phone" type="tel" inputmode="tel" maxlength="20" required placeholder="Con lada de país" /></label><p class="text-sm text-slate-500">Al agregarlo, participa en la caja. El teléfono se guarda solo en este teléfono.</p><div class="flex gap-2"><button class="btn-primary" type="submit" ${!isOnline() && !state.isDemo || state.syncing ? "disabled" : ""}>Guardar socio</button><button class="btn-secondary" type="button" data-action="toggle-person-form">Cancelar</button></div></form>` : ""}</section><section class="card"><div class="flex flex-wrap items-end justify-between gap-3"><form id="search-person-form" class="search-form"><label class="search-box">${icon("search", 19)}<input name="query" type="search" value="${h(state.personSearch)}" placeholder="Buscar socio o teléfono" aria-label="Buscar contacto" /></label></form><button class="btn-secondary" data-action="general-movements">Movimientos generales</button></div><div class="mt-4 flex flex-wrap gap-2"><button class="filter-chip ${state.personFilter === "all" ? "active" : ""}" data-action="person-filter" data-filter="all">Todos (${state.people.length})</button><button class="filter-chip ${state.personFilter === "with-movements" ? "active" : ""}" data-action="person-filter" data-filter="with-movements">Con movimientos (${withMovementsCount})</button></div><div class="mt-4 space-y-3">${personRows || emptyState("No encontramos contactos con ese nombre.")}</div></section></div>`;
+  return `<div class="space-y-4"><section class="card"><p class="text-sm text-slate-600">Toca una persona para consultar sus movimientos, su calendario y sus pagos pendientes.</p>${state.showPersonForm ? `<form id="person-form" class="person-form mt-5"><label class="field-label">Nombre completo<input class="field" name="name" maxlength="200" required placeholder="Nombre de la persona" /></label><label class="field-label">Teléfono de WhatsApp<input class="field" name="phone" type="tel" inputmode="tel" maxlength="20" required placeholder="Con lada de país" /></label><p class="text-sm text-slate-500">Al agregarlo, participa en la caja. El teléfono se guarda solo en este teléfono.</p><div class="flex gap-2"><button class="btn-primary" type="submit" ${!isOnline() && !state.isDemo || state.syncing ? "disabled" : ""}>Guardar socio</button><button class="btn-secondary" type="button" data-action="toggle-person-form">Cancelar</button></div></form>` : ""}</section><section class="card"><div class="flex flex-wrap items-end justify-between gap-3"><form id="search-person-form" class="search-form"><label class="search-box">${icon("search", 19)}<input name="query" type="search" value="${h(state.personSearch)}" placeholder="Buscar socio o teléfono" aria-label="Buscar contacto" /></label></form><button class="btn-secondary" data-action="general-movements">Movimientos generales</button></div><div class="mt-4 flex flex-wrap gap-2"><button class="filter-chip ${state.personFilter === "all" ? "active" : ""}" data-action="person-filter" data-filter="all">Todos (${state.people.length})</button><button class="filter-chip ${state.personFilter === "with-movements" ? "active" : ""}" data-action="person-filter" data-filter="with-movements">Con movimientos (${withMovementsCount})</button></div><div class="mt-4 space-y-3">${personRows || emptyState("No encontramos contactos con ese nombre.")}</div></section></div>`;
 }
 
 function renderLoans() {
@@ -821,15 +924,15 @@ function renderLoans() {
   const hasLoanPending = state.pending.some((item) => item.action === "loan" && item.payload.p_ciclo_id === cycle?.id);
   const loans = state.loans.filter((loan) => loan.ciclo_id === cycle?.id).sort((a, b) => String(b.fecha_desembolso).localeCompare(String(a.fecha_desembolso)));
   const open = loans.filter((loan) => loanBalance(loan) > 0.01);
-  const rows = open.map((loan) => { const person = state.people.find((row) => row.id === loan.participante_id); const due = participantDues(person, cycle); return `<article class="loan-card ${person?.tipo === "externo" ? "external" : ""}"><div class="flex flex-wrap items-start justify-between gap-3"><div><h3 class="text-lg font-extrabold">${h(participantName(loan.participante_id))}</h3><div class="mt-2 flex flex-wrap gap-2">${person?.tipo === "externo" ? '<span class="badge badge-amber">No participa en caja</span>' : '<span class="badge badge-green">Socio</span>'}<span class="badge badge-gray">Interés fijo 5%</span></div><p class="mt-2 text-sm text-slate-500">Entregado ${dateText(loan.fecha_desembolso)}</p></div><span class="badge badge-amber">Por cobrar</span></div><div class="loan-numbers mt-4"><div><span>Capital inicial</span><strong>${money(loan.capital_original)}</strong></div><div><span>Réditos</span><strong>${money(loanInterestBalance(loan))}</strong></div><div><span>Falta por pagar</span><strong>${money(loanBalance(loan))}</strong></div></div><div class="mt-4 flex flex-wrap gap-2"><button class="btn-primary" data-action="collect-person" data-person="${h(loan.participante_id)}" data-loan="${h(loan.id)}">Registrar pago</button>${due.loanTotal > 0.01 ? `<button class="btn-secondary" data-action="whatsapp" data-person="${h(loan.participante_id)}">${icon("message", 17)} Recordar</button>` : ""}</div></article>`; }).join("");
+  const rows = open.map((loan) => { const person = state.people.find((row) => row.id === loan.participante_id); const due = participantDues(person, cycle); return `<article class="loan-card ${person?.tipo === "externo" ? "external" : ""}"><div class="flex flex-wrap items-start justify-between gap-3"><div><h3 class="text-lg font-extrabold">${h(participantName(loan.participante_id))}</h3><div class="mt-2 flex flex-wrap gap-2">${person?.tipo === "externo" ? '<span class="badge badge-amber">No participa en caja</span>' : '<span class="badge badge-green">Socio</span>'}<span class="badge badge-gray">5% cada 15 días</span></div><p class="mt-2 text-sm text-slate-500">Entregado ${dateText(loan.fecha_desembolso)}</p></div><span class="badge badge-amber">Por cobrar</span></div><div class="loan-numbers mt-4"><div><span>Capital inicial</span><strong>${money(loan.capital_original)}</strong></div><div><span>Réditos actuales</span><strong>${money(loanInterestBalance(loan))}</strong></div><div><span>Falta por pagar</span><strong>${money(loanBalance(loan))}</strong></div></div><div class="mt-4 flex flex-wrap gap-2"><button class="btn-primary" data-action="collect-person" data-person="${h(loan.participante_id)}" data-loan="${h(loan.id)}">Registrar pago</button>${due.loanTotal > 0.01 ? `<button class="btn-secondary" data-action="whatsapp" data-person="${h(loan.participante_id)}">${icon("message", 17)} Recordar</button>` : ""}</div></article>`; }).join("");
   const newContact = state.loanPersonChoice === "__new__";
   return `<div class="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
-    <section class="card"><p class="text-xs font-bold uppercase tracking-wide text-teal-700">Nuevo préstamo</p><h2 class="mt-1 text-xl font-extrabold">Prestar dinero</h2><p class="mt-2 text-sm leading-6 text-slate-500">El interés es fijo: 5% del capital. El préstamo debe quedar pagado antes de entregar la caja; no hace falta definir un plazo.</p>
+    <section class="card"><p class="text-xs font-bold uppercase tracking-wide text-teal-700">Nuevo préstamo</p><h2 class="mt-1 text-xl font-extrabold">Prestar dinero</h2><p class="mt-2 text-sm leading-6 text-slate-500">Se calcula 5% cada 15 días completos sobre el capital que siga pendiente. Los pagos a capital reducen los réditos siguientes. No hace falta definir un plazo fijo.</p>
       ${!cycle ? `<p class="info-banner mt-4">La temporada se abrirá al confirmar la primera operación. Necesitas conexión para crear un préstamo.</p>` : ""}
       <form id="loan-form" class="mt-5 space-y-4">
         <label class="field-label">¿A quién se lo prestas?<select class="field" name="person_choice" id="loan-person-choice" required><option value="">Elige un contacto</option>${participantOptions("all", "", true)}<option value="__new__" ${newContact ? "selected" : ""}>Agregar contacto externo</option></select></label>
         <div id="loan-new-contact" class="space-y-4 ${newContact ? "" : "hidden"}"><p class="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">Se agregará con la etiqueta “No participa en caja”.</p><label class="field-label">Nombre<input class="field" name="new_name" maxlength="200" ${newContact ? "required" : ""} placeholder="Nombre del contacto" /></label><label class="field-label">Teléfono de WhatsApp<input class="field" name="new_phone" type="tel" inputmode="tel" maxlength="20" placeholder="Con lada de país" /></label></div>
-        <label class="field-label">Cantidad a prestar<input class="field" name="capital" type="number" min="0.01" max="${MAX_DB_AMOUNT}" step="0.01" required inputmode="decimal" placeholder="0.00" /></label>
+        <label class="field-label">Cantidad a prestar${moneyField("capital", null, { required: true, placeholder: "0.00", extra: `maxlength="16" aria-label="Cantidad a prestar en pesos"` })}</label>
         <label class="field-label">Fecha de entrega (sábado)<input class="field" name="date" type="date" value="${lastSaturdayOnOrBefore()}" min="${cycle?.fecha_inicio || ""}" max="${todayMx()}" required /></label>
         <label class="field-label">Forma de entrega<select class="field" name="method"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option></select></label>
         <button class="btn-primary w-full" type="submit" ${(!isOnline() && !state.isDemo) || state.syncing || hasLoanPending ? "disabled" : ""}>Confirmar préstamo</button>
@@ -847,12 +950,16 @@ function renderCollectionForm() {
   const due = participantDues(person, cycle);
   const loans = due.loans;
   const selectedLoan = loans.find((loan) => loan.id === state.selectedLoanForPayment) || loans[0] || null;
-  const interest = selectedLoan ? loanInterestBalance(selectedLoan) : 0;
-  const saturdayOnlyHelp = loans.length && !isSaturday(todayMx()) ? `<p class="info-banner mt-4">El ahorro se puede anotar hoy. Supabase recibe los abonos de préstamo los sábados; este control se habilitará ese día.</p>` : "";
-  return `<div class="space-y-4"><section class="collection-person"><button class="btn-quiet" data-action="collection-back">${icon("arrow", 18)} Volver</button><h2 class="mt-3 text-2xl font-extrabold">${h(person.nombre)}</h2><p class="mt-1 text-sm text-slate-600">Anota lo que entregó hoy. Cada movimiento guardará su propio folio.</p>${person.tipo === "externo" ? '<span class="badge badge-amber mt-3">No participa en caja</span>' : '<span class="badge badge-green mt-3">Socio de la caja</span>'}${!cycle ? `<p class="info-banner mt-4">La temporada se abrirá al guardar el primer movimiento. Para abrirla, necesitas conexión a internet.</p>` : `<p class="mt-2 text-xs text-slate-500">${h(cycle.nombre)} · se registrará con la fecha de hoy (${dateText(todayMx())}).</p>`}</section>
+  const operationDate = state.collectionDate || todayMx();
+  const interest = selectedLoan ? loanInterestBalance(selectedLoan, operationDate) : 0;
+  const lastPaymentDate = selectedLoan ? lastLoanPaymentDate(selectedLoan) : "";
+  const backdatedLoanDate = Boolean(lastPaymentDate && operationDate < lastPaymentDate);
+  const saturdayOnlyHelp = loans.length && (!isSaturday(operationDate) || backdatedLoanDate) ? `<p class="info-banner mt-4">${!isSaturday(operationDate) ? "La aportación de caja puede registrarse hoy. Para un abono de préstamo elige un sábado en el calendario." : `Ese préstamo ya tiene un abono posterior (${dateText(lastPaymentDate)}). Para conservar el cálculo quincenal, registra el abono después de esa fecha.`}</p>` : "";
+  const operationDateCaption = operationDate === todayMx() ? `fecha de hoy (${dateText(operationDate)})` : `sábado seleccionado (${dateText(operationDate)})`;
+  return `<div class="space-y-4"><section class="collection-person"><button class="btn-quiet" data-action="collection-back">${icon("arrow", 18)} Volver</button><h2 class="mt-3 text-2xl font-extrabold">${h(person.nombre)}</h2><p class="mt-1 text-sm text-slate-600">Anota lo que entregó. Cada movimiento guardará su propio folio.</p>${person.tipo === "externo" ? '<span class="badge badge-amber mt-3">No participa en caja</span>' : '<span class="badge badge-green mt-3">Socio de la caja</span>'}${!cycle ? `<p class="info-banner mt-4">La temporada se abrirá al guardar el primer movimiento. Para abrirla, necesitas conexión a internet.</p>` : `<p class="mt-2 text-xs text-slate-500">${h(cycle.nombre)} · se registrará con la ${operationDateCaption}.</p>`}</section>
     <form id="collection-form" class="card space-y-5">
-      ${person.tipo === "socio" ? `<section class="payment-section"><div class="flex items-center justify-between gap-3"><div><h3 class="font-extrabold">Ahorro para la caja</h3><p class="mt-1 text-sm text-slate-600">${due.savingsPending ? "Tiene un recordatorio pendiente." : "Cantidad que aportó hoy."}</p></div><span class="badge badge-green">Caja de ahorro</span></div><label class="field-label mt-4">¿Cuánto aportó?<input class="field" name="savings" type="number" min="0" max="${MAX_DB_AMOUNT}" step="0.01" inputmode="decimal" placeholder="0.00" /></label></section>` : ""}
-      ${loans.length ? `<section class="payment-section"><div class="flex flex-wrap items-start justify-between gap-3"><div><h3 class="font-extrabold">Abono de préstamo</h3><p class="mt-1 text-sm text-slate-600">El interés fijo es 5%. El servidor aplica el pago primero a réditos y luego a capital.</p></div><span class="badge badge-amber">${loans.length} préstamo${loans.length === 1 ? "" : "s"}</span></div><label class="field-label mt-4">Préstamo<select class="field" name="loan_id" id="collection-loan" required>${loans.map((loan) => `<option value="${h(loan.id)}" ${loan.id === selectedLoan?.id ? "selected" : ""}>Saldo total ${money(loanBalance(loan))}</option>`).join("")}</select></label><div class="loan-summary-grid mt-3"><div><span>Réditos pendientes</span><strong>${money(interest)}</strong></div><div><span>Deuda total</span><strong>${money(selectedLoan ? loanBalance(selectedLoan) : 0)}</strong></div></div><fieldset class="mt-4"><legend class="field-label">¿Cómo quieres aplicar el pago?</legend><div class="segmented-options mt-2"><label><input type="radio" name="loan_mode" value="interest-only" checked /><span>Solo réditos</span></label><label><input type="radio" name="loan_mode" value="with-capital" /><span>Abonar a capital</span></label></div></fieldset><label class="field-label mt-4">Cantidad recibida<input class="field" name="loan_amount" id="collection-loan-amount" type="number" min="0.01" max="${selectedLoan ? interest : 0}" step="0.01" inputmode="decimal" placeholder="0.00" ${!isSaturday(todayMx()) ? "disabled" : ""} /></label><div class="interest-preview mt-3"><span>Se aplica a réditos</span><strong id="collection-interest">${money(0)}</strong><span>Se aplica a capital</span><strong id="collection-capital-applied">${money(0)}</strong></div><div class="payment-total"><span>Total recibido</span><strong id="collection-total">${money(0)}</strong></div>${saturdayOnlyHelp}</section>` : ""}
+      ${person.tipo === "socio" ? `<section class="payment-section"><div class="flex items-center justify-between gap-3"><div><h3 class="font-extrabold">Ahorro para la caja</h3><p class="mt-1 text-sm text-slate-600">${due.savingsPending ? "Tiene un recordatorio pendiente." : "Cantidad que aportó."}</p></div><span class="badge badge-green">Caja de ahorro</span></div><label class="field-label mt-4">¿Cuánto aportó?${moneyField("savings", null, { placeholder: "0.00", extra: `maxlength="16" aria-label="Cantidad de ahorro en pesos"` })}</label></section>` : ""}
+      ${loans.length ? `<section class="payment-section"><div class="flex flex-wrap items-start justify-between gap-3"><div><h3 class="font-extrabold">Abono de préstamo</h3><p class="mt-1 text-sm text-slate-600">Se calcula 5% cada 15 días completos sobre el capital pendiente. El pago se aplica primero a réditos y luego a capital.</p></div><span class="badge badge-amber">${loans.length} préstamo${loans.length === 1 ? "" : "s"}</span></div><label class="field-label mt-4">Préstamo<select class="field" name="loan_id" id="collection-loan" required>${loans.map((loan) => `<option value="${h(loan.id)}" ${loan.id === selectedLoan?.id ? "selected" : ""}>Saldo total ${money(loanBalance(loan, operationDate))}</option>`).join("")}</select></label><div class="loan-summary-grid mt-3"><div><span>Réditos pendientes</span><strong>${money(interest)}</strong></div><div><span>Deuda total</span><strong>${money(selectedLoan ? loanBalance(selectedLoan, operationDate) : 0)}</strong></div></div><fieldset class="mt-4"><legend class="field-label">¿Cómo quieres aplicar el pago?</legend><div class="segmented-options mt-2"><label><input type="radio" name="loan_mode" value="interest-only" ${interest > 0 ? "checked" : "disabled"} /><span>Solo réditos</span></label><label><input type="radio" name="loan_mode" value="with-capital" ${interest <= 0 ? "checked" : ""} /><span>Abonar a capital</span></label></div></fieldset><label class="field-label mt-4">Cantidad recibida${moneyField("loan_amount", "collection-loan-amount", { placeholder: "0.00", extra: `maxlength="16" aria-label="Cantidad recibida en pesos" ${!isSaturday(operationDate) || backdatedLoanDate ? "disabled" : ""}` })}</label><div class="interest-preview mt-3"><span>Se aplica a réditos</span><strong id="collection-interest">${money(0)}</strong><span>Se aplica a capital</span><strong id="collection-capital-applied">${money(0)}</strong></div><div class="payment-total"><span>Total recibido</span><strong id="collection-total">${money(0)}</strong></div>${saturdayOnlyHelp}</section>` : ""}
       <label class="field-label">Forma de entrega<select class="field" name="method"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option></select></label>
       <div class="flex flex-wrap gap-2"><button class="btn-primary" type="submit" ${(!cycle && !isOnline()) || state.syncing ? "disabled" : ""}>Guardar ingreso o pago</button><button class="btn-secondary" type="button" data-action="collection-back">Cancelar</button></div>
     </form></div>`;
@@ -863,14 +970,13 @@ function updateCollectionPreview() {
   if (!form) return;
   const data = new FormData(form);
   const loan = state.loans.find((row) => row.id === String(data.get("loan_id") || ""));
-  const payment = Number(data.get("loan_amount") || 0);
+  const payment = moneyInputValue(data.get("loan_amount"));
   const mode = String(data.get("loan_mode") || "interest-only");
-  const interestDue = loan ? loanInterestBalance(loan) : 0;
-  const total = Number.isFinite(payment) && payment > 0 ? Math.min(payment, loan ? loanBalance(loan) : 0) : 0;
+  const operationDate = state.collectionDate || todayMx();
+  const interestDue = loan ? loanInterestBalance(loan, operationDate) : 0;
+  const total = Number.isFinite(payment) && payment > 0 ? Math.min(payment, loan ? (mode === "interest-only" ? interestDue : loanBalance(loan, operationDate)) : 0) : 0;
   const interest = Math.min(total, interestDue);
   const capital = Math.max(0, total - interest);
-  const amountField = document.querySelector("#collection-loan-amount");
-  if (amountField) amountField.max = String(loan ? (mode === "interest-only" ? interestDue : loanBalance(loan)) : 0);
   const interestLabel = document.querySelector("#collection-interest");
   const capitalLabel = document.querySelector("#collection-capital-applied");
   const totalLabel = document.querySelector("#collection-total");
@@ -883,19 +989,20 @@ async function saveCollection(form) {
   const data = new FormData(form);
   const person = state.people.find((row) => row.id === state.collectionPersonId);
   let cycle = selectedCycle();
-  const date = todayMx();
+  const date = state.collectionDate || todayMx();
   const method = String(data.get("method") || "");
-  const savings = Number(data.get("savings") || 0);
+  const savings = moneyInputValue(data.get("savings"));
   const loanId = String(data.get("loan_id") || "");
   const loan = state.loans.find((row) => cycle?.activo && row.id === loanId && row.ciclo_id === cycle.id && row.participante_id === person?.id && row.estado === "activo");
-  const loanPayment = Number(data.get("loan_amount") || 0);
-  const interest = loan ? loanInterestBalance(loan) : 0;
+  const loanPayment = moneyInputValue(data.get("loan_amount"));
+  const interest = loan ? loanInterestBalance(loan, date) : 0;
   if (!person) { toast("El contacto ya no está disponible. Actualiza la información e intenta otra vez.", "error"); return; }
   if (!Number.isFinite(savings) || savings < 0 || savings > MAX_DB_AMOUNT || Math.round(savings * 100) !== savings * 100) { toast("Revisa la cantidad del ahorro; puede quedar en blanco o ser mayor que cero con hasta dos decimales.", "error"); return; }
   if (savings > 0 && (person.tipo !== "socio" || person.estatus !== "activo")) { toast("Solo un socio activo puede aportar ahorro a la caja.", "error"); return; }
   if (loanPayment > 0 && !loan) { toast("Elige uno de los préstamos activos de esta persona.", "error"); return; }
-  if (loanPayment > 0 && (!Number.isFinite(loanPayment) || loanPayment > loanBalance(loan) || Math.round(loanPayment * 100) !== loanPayment * 100)) { toast("El pago debe ser mayor que cero y no superar el saldo pendiente del préstamo.", "error"); return; }
-  if (loanPayment > 0 && !isSaturday(date)) { toast("El ahorro se puede anotar hoy. Los abonos de préstamo se registran en sábado.", "error"); return; }
+  if (loanPayment > 0 && (!Number.isFinite(loanPayment) || loanPayment > loanBalance(loan, date) || Math.round(loanPayment * 100) !== loanPayment * 100)) { toast("El pago debe ser mayor que cero y no superar el saldo pendiente del préstamo.", "error"); return; }
+  if (loanPayment > 0 && !isSaturday(date)) { toast("El ahorro se puede anotar cualquier día. Los abonos de préstamo se registran en sábado; abre el calendario y elige uno.", "error"); return; }
+  if (loanPayment > 0 && date < lastLoanPaymentDate(loan)) { toast(`Ese préstamo ya tiene un abono posterior (${dateText(lastLoanPaymentDate(loan))}). Elige una fecha posterior para conservar el orden de los réditos.`, "error"); return; }
   if (savings <= 0 && loanPayment <= 0) { toast("Escribe la cantidad del ahorro recibido o el pago del préstamo.", "error"); return; }
   if (!loan && savings <= 0) { toast("Escribe la cantidad del ahorro recibido.", "error"); return; }
   if (!["efectivo", "transferencia"].includes(method)) { toast("Elige efectivo o transferencia como forma de entrega.", "error"); return; }
@@ -937,6 +1044,7 @@ async function saveCollection(form) {
   state.view = state.collectionReturnView || "alertas";
   state.collectionPersonId = null;
   state.selectedLoanForPayment = null;
+  state.collectionDate = null;
   renderShell();
 }
 
@@ -964,6 +1072,7 @@ function renderView() {
   if (state.loading && !state.cycles.length && !state.people.length) return `<div class="card py-12 text-center text-slate-500">Cargando la información de tu caja…</div>`;
   switch (state.view) {
     case "movimientos": return renderMovementForm();
+    case "calendario": return renderGlobalCalendar();
     case "alertas": return renderAlerts();
     case "personas": return renderPeople();
     case "prestamos": return renderLoans();
@@ -1092,6 +1201,8 @@ async function submitLogin(form) {
   const password = String(data.get("password") || "");
   const button = form.querySelector("button[type=submit]");
   button.disabled = true; button.textContent = "Entrando…";
+  if (email.toLowerCase() === "admin" && password === "root") { await submitDemoLogin(); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { renderLogin("Escribe el correo electrónico y la contraseña de tu cuenta."); return; }
   const { data: result, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) { renderLogin(error.message.toLowerCase().includes("invalid login credentials") ? "El correo o la contraseña no son correctos." : friendlyError(error)); return; }
   await startSession(result.session);
@@ -1394,7 +1505,7 @@ async function createLoan(form) {
   let participantId = choice === "__new__" ? "" : choice;
   const newName = String(data.get("new_name") || "").trim();
   const newPhone = String(data.get("new_phone") || "").replace(/\D/g, "");
-  const capital = Number(data.get("capital"));
+  const capital = moneyInputValue(data.get("capital"));
   const date = String(data.get("date"));
   const method = String(data.get("method"));
   if (!isSaturday(date)) { toast("La fecha de entrega debe ser sábado.", "error"); return; }
@@ -1403,7 +1514,7 @@ async function createLoan(form) {
   if (choice === "__new__" && !newName) { toast("Escribe el nombre del nuevo contacto.", "error"); return; }
   if (newPhone && (newPhone.length < 10 || newPhone.length > 15)) { toast("Revisa el teléfono e incluye la lada del país.", "error"); return; }
   if (!Number.isFinite(capital) || capital <= 0 || capital > MAX_DB_AMOUNT || Math.round(capital * 100) !== capital * 100) { toast("El capital debe estar dentro del límite permitido y tener hasta dos decimales.", "error"); return; }
-  if (!window.confirm(`Confirma el préstamo:\n\nContacto: ${choice === "__new__" ? newName : participantName(participantId)}\nCapital: ${money(capital)}\nInterés fijo 5%: ${money(Math.round(capital * 0.05 * 100) / 100)}\nTotal a devolver: ${money(capital + Math.round(capital * 0.05 * 100) / 100)}\nEntrega: ${dateText(date)}\n\nDebe quedar pagado antes de entregar la caja. ¿Continuar?`)) return;
+  if (!window.confirm(`Confirma el préstamo:\n\nContacto: ${choice === "__new__" ? newName : participantName(participantId)}\nCapital: ${money(capital)}\nRédito: 5% por cada 15 días completos sobre el capital pendiente\nPrimer cobro de réditos: después de 15 días\nEntrega: ${dateText(date)}\n\nLos réditos no se suman al capital. ¿Continuar?`)) return;
   if ((!cycle || !cycle.activo) && !state.isDemo) {
     const { error } = await supabase.rpc("asegurar_caja_automatica");
     if (error) { toast(friendlyError(error), "error"); return; }
@@ -1561,13 +1672,14 @@ function handleClick(event) {
   if (action === "cancel-tx") { cancelTransaction(button.dataset.id, button); return; }
   if (action === "close-cycle") { state.view = "temporadas"; renderShell(); return; }
   if (action === "toggle-person-form") { state.showPersonForm = !state.showPersonForm; renderShell(); return; }
-  if (action === "collection-back") { state.view = state.collectionReturnView || "alertas"; state.collectionPersonId = null; state.selectedLoanForPayment = null; renderShell(); return; }
+  if (action === "collection-back") { state.view = state.collectionReturnView || "alertas"; state.collectionPersonId = null; state.selectedLoanForPayment = null; state.collectionDate = null; renderShell(); return; }
   if (action === "collect-person") {
     const person = state.people.find((row) => row.id === button.dataset.person);
     if (!person) { toast("No encontramos ese contacto. Actualiza la información e intenta de nuevo.", "error"); return; }
     state.collectionReturnView = state.view;
     state.collectionPersonId = person.id;
     state.selectedLoanForPayment = button.dataset.loan || null;
+    state.collectionDate = null;
     state.view = "cobrar"; state.menuOpen = false; renderShell(); return;
   }
   if (action === "loan-person") { state.loanPersonChoice = button.dataset.person; state.view = "prestamos"; state.menuOpen = false; renderShell(); return; }
@@ -1575,6 +1687,23 @@ function handleClick(event) {
   if (action === "toggle-person") { state.selectedPersonId = state.selectedPersonId === button.dataset.id ? null : button.dataset.id; if (!state.selectedPersonId) state.calendarPersonId = null; renderShell(); return; }
   if (action === "person-filter") { state.personFilter = button.dataset.filter || "all"; renderShell(); return; }
   if (action === "toggle-calendar") { state.selectedPersonId = button.dataset.person; state.calendarPersonId = state.calendarPersonId === button.dataset.person ? null : button.dataset.person; renderShell(); return; }
+  if (action === "calendar-week") {
+    state.calendarCycleId = button.dataset.cycle || state.calendarCycleId || selectedCycle()?.id || null;
+    state.calendarWeek = button.dataset.saturday || "";
+    const weekIndex = calendarWeeks(state.cycles.find((item) => item.id === state.calendarCycleId)).find((week) => week.saturday === state.calendarWeek)?.index;
+    if (weekIndex) history.replaceState(null, "", `#S${weekIndex}`);
+    state.view = "calendario"; renderShell(); return;
+  }
+  if (action === "calendar-collect") {
+    const personId = button.dataset.person || document.querySelector("#calendar-quick-person")?.value;
+    const person = state.people.find((row) => row.id === personId);
+    if (!person) { toast("Elige a la persona para registrar el pago.", "info"); return; }
+    state.collectionReturnView = "calendario";
+    state.collectionPersonId = person.id;
+    state.selectedLoanForPayment = button.dataset.loan || null;
+    state.collectionDate = button.dataset.saturday || state.calendarWeek || todayMx();
+    state.view = "cobrar"; state.menuOpen = false; renderShell(); return;
+  }
   if (action === "close-calendar") { state.calendarPersonId = null; renderShell(); return; }
   if (action === "toggle-missed-week") { setMissedWeek(button.dataset.person, button.dataset.saturday, !missedWeek(button.dataset.person, button.dataset.saturday)); state.selectedPersonId = button.dataset.person; state.calendarPersonId = button.dataset.person; renderShell(); return; }
   if (action === "person-movements") { state.selectedPersonId = button.dataset.id; state.statementPersonId = button.dataset.id; state.view = "movimientos"; state.showMovementForm = false; renderShell(); return; }
@@ -1605,7 +1734,6 @@ async function handleSubmit(event) {
   if (button) { button.disabled = true; button.textContent = busyLabel; }
   try {
     if (form.id === "login-form") await submitLogin(form);
-    else if (form.id === "demo-login-form") await submitDemoLogin(form);
     else if (form.id === "password-form") await submitPasswordChange(form);
     else if (form.id === "profile-password-form") await changeProfilePassword(form);
     else if (form.id === "movement-form") await saveMovement(form);
@@ -1614,6 +1742,13 @@ async function handleSubmit(event) {
     else if (form.id === "collection-form") await saveCollection(form);
     else if (form.id === "final-reconcile-form") await closeSeason(form);
     else if (form.id === "search-person-form") { state.personSearch = String(new FormData(form).get("query") || "").trim(); renderShell(); }
+    else if (form.id === "calendar-jump-form") {
+      const number = Number(String(new FormData(form).get("week") || "").replace(/\D/g, ""));
+      const cycle = state.cycles.find((item) => item.id === state.calendarCycleId) || selectedCycle();
+      const target = calendarWeeks(cycle).find((week) => week.index === number);
+      if (!target) toast("No encontramos esa semana en esta caja. Revisa el número e intenta de nuevo.", "error");
+      else { state.calendarCycleId = cycle.id; state.calendarWeek = target.saturday; state.calendarMonth = target.saturday.slice(0, 7); history.replaceState(null, "", `#S${target.index}`); renderShell(); }
+    }
     else if (form.dataset.queueCorrection) await correctQueuedItem(form);
   } catch (error) {
     toast(friendlyError(error), "error");
@@ -1639,6 +1774,8 @@ appScreen.addEventListener("change", (event) => {
     if (name) name.required = state.loanPersonChoice === "__new__";
   }
   if (event.target.matches("#statement-month")) { state.selectedStatementMonth = event.target.value; renderShell(); }
+  if (event.target.matches("#calendar-cycle")) { state.calendarCycleId = event.target.value; state.calendarWeek = ""; state.calendarMonth = ""; renderShell(); }
+  if (event.target.matches("#calendar-month")) { state.calendarMonth = event.target.value; renderShell(); }
   if (event.target.matches("#contact-frequency")) { setContactFrequency(event.target.dataset.person, event.target.value); renderShell(); }
   if (event.target.matches("#movement-loan")) {
     const chosen = event.target.selectedOptions[0]?.dataset.person;
@@ -1646,6 +1783,27 @@ appScreen.addEventListener("change", (event) => {
     if (person && chosen) person.value = chosen;
   }
   if (event.target.matches("#collection-loan, #collection-loan-amount, [name=loan_mode]")) updateCollectionPreview();
+});
+
+appScreen.addEventListener("input", (event) => {
+  const field = event.target;
+  if (field.matches("[data-money-input]")) {
+    const raw = field.value.replace(/[^\d.]/g, "");
+    const [integerPart = "", ...decimalParts] = raw.split(".");
+    const integer = integerPart.slice(0, 10);
+    const decimals = decimalParts.join("").slice(0, 2);
+    field.value = decimalParts.length ? `${integer}.${decimals}` : integer;
+  }
+  if (field.matches("#collection-loan-amount, [name=savings]")) updateCollectionPreview();
+});
+
+appScreen.addEventListener("focusout", (event) => {
+  const field = event.target;
+  if (!field.matches("[data-money-input]") || !field.value.trim()) return;
+  const amount = moneyInputValue(field.value);
+  if (!Number.isFinite(amount) || amount < 0 || amount > MAX_DB_AMOUNT) return;
+  field.value = new Intl.NumberFormat("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
+  if (field.matches("#collection-loan-amount, [name=savings]")) updateCollectionPreview();
 });
 
 window.addEventListener("online", () => { renderShell(); if (state.user) syncQueue(); });
